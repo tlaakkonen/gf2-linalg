@@ -132,5 +132,10 @@ impl<T: ToGF2> std::ops::DivAssign<T> for GF2 {
     }
 }
 
-
+#[cfg(feature = "rand")]
+impl rand::distr::Distribution<GF2> for rand::distr::StandardUniform {
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> GF2 {
+        rng.random::<bool>().into()
+    }
+}
 
