@@ -1,4 +1,4 @@
-use crate::{ToGF2, GF2};
+use crate::{Matrix, ToGF2, GF2};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Poly {
@@ -92,6 +92,11 @@ impl Poly {
             GF2::new(self.terms.len() % 2 != 0)
         }
     }
+
+    #[cfg(feature = "rand")]
+    pub fn random(rng: &mut impl rand::Rng, degree: usize) -> Poly {
+        Poly::new((0..degree).map(|_| rng.random::<GF2>()))
+    }
 }
 
 impl std::fmt::Debug for Poly {
@@ -103,7 +108,7 @@ impl std::fmt::Debug for Poly {
                 _ => write!(f, "x^{}", t)?
             }
         } else {
-            write!(f, "0")?
+            return write!(f, "0")
         };
 
         for &t in &self.terms[1..] {
@@ -280,6 +285,12 @@ impl Poly {
         self.pow2k(1);
     }
 
+    pub fn square_root(&self) -> Option<Poly> {
+        Some(Poly {
+            terms: self.terms.iter().map(|&t| (t % 2 == 0).then_some(t / 2)).collect::<Option<Vec<_>>>()?
+        })
+    }
+
     pub fn pow2k(&mut self, k: usize) {
         self.terms.iter_mut().for_each(|t| *t <<= k)
     }
@@ -393,7 +404,142 @@ impl Poly {
     }
 
     pub fn diff(&self) -> Poly {
-        Poly { terms: self.terms.iter().flat_map(|&t| (t % 2 != 0).then_some(t - 1)).collect() }
+        Poly { terms: self.terms.iter().flat_map(|&t| (t % 2 != 0).then(|| t - 1)).collect() }
+    }
+
+    pub fn is_square_free(&self) -> bool {
+        self.gcd(&self.diff()).is_one()
+    }
+
+    pub fn square_free(&self) -> Vec<(Poly, usize)> {
+        if self.is_zero() || self.is_one() {
+            return vec![(self.clone(), 1)]
+        }
+
+        if let Some(sqrt) = self.square_root() {
+            let mut sff = sqrt.square_free();
+            sff.iter_mut().for_each(|(_, p)| *p *= 2);
+            return sff;
+        }
+
+        let g = self.gcd(&self.diff());
+        if g.is_one() {
+            return vec![(self.clone(), 1)]
+        }
+
+        let sff_a = g.square_free();
+        let sff_b = self.quot(&g).square_free();
+        let mut output = Vec::new();
+        let mut idx_a = 0;
+        let mut idx_b = 0;
+        while idx_a < sff_a.len() && idx_b < sff_b.len() {
+            if sff_a[idx_a].1 < sff_b[idx_b].1 {
+                output.push(sff_a[idx_a].clone());
+                idx_a += 1;
+            } else if sff_a[idx_a].1 > sff_b[idx_b].1 {
+                output.push(sff_b[idx_b].clone());
+                idx_b += 1;
+            } else {
+                output.push((&sff_a[idx_a].0 * &sff_b[idx_b].0, sff_a[idx_a].1));
+                idx_a += 1;
+                idx_b += 1;
+            }
+        }
+        while idx_a < sff_a.len() {
+            output.push(sff_a[idx_a].clone());
+            idx_a += 1;
+        }
+        while idx_b < sff_b.len() {
+            output.push(sff_b[idx_b].clone());
+            idx_b += 1;
+        }
+        output
+    }
+
+    pub fn is_irreducible(&self) -> bool {
+        self.is_square_free() && {
+            let mut mat = self.berlekamp_matrix();
+            mat += Matrix::eye(mat.shape.0);
+            mat.rank() == mat.shape.0 - 1
+        }
+    }
+
+    pub fn berlekamp_matrix(&self) -> Matrix {
+        let n = self.degree();
+        if n == 0 {
+            return Matrix::zeros(0, 0)
+        }
+
+        let mut mat = Matrix::zeros(n, n);
+        let mut xiq = Poly::one();
+        for i in 0..n {
+            for (j, c) in xiq.coeffs().enumerate() {
+                mat[(j, i)] = c;
+            }
+            xiq = (xiq * Poly::monom(2)).rem(self);
+        }
+        mat
+    }
+
+    pub fn factor_square_free(&self) -> Vec<Poly> {
+        if self.is_one() || self.is_zero() {
+            return vec![self.clone()]
+        }
+
+        let mut mat = self.berlekamp_matrix();
+        mat += Matrix::eye(mat.shape.0);
+        let nsp = mat.null_space();
+
+        let mut factors = Vec::with_capacity(nsp.shape.1);
+        let mut q = self.clone();
+        for i in 0..nsp.shape.1 {
+            let g = Poly::new(nsp.col(i).iter());
+            if g.is_one() || q.is_one() { continue; }
+
+            let h = q.gcd(&g);
+            if !h.is_one() { 
+                q = q.quot(&h);
+                factors.push(h);
+            } else {
+                let h = q.gcd(&(g - Poly::one()));
+                q = q.quot(&h);
+                factors.push(h);
+            }
+        }
+        if self.is_one() || !q.is_one() {
+            factors.push(q);
+        }
+        factors.sort_by_key(Poly::degree);
+        factors
+    }
+
+    pub fn factor(&self) -> Vec<Poly> {
+        if self.is_one() || self.is_zero() {
+            return vec![self.clone()]
+        }
+
+        let sff = self.square_free();
+        let mut result = Vec::new();
+        for (mut term, reps) in sff {
+            if term.terms().len() > 0 && term.terms()[0] > 0 {
+                for _ in 0..term.terms()[0] * reps {
+                    result.push(Poly::monom(1));
+                }
+                term = term.quot(&Poly::monom(term.terms()[0]));
+            }
+
+            if term.is_one() {
+                continue;
+            }
+
+            for factor in term.factor_square_free() {
+                for _ in 0..reps {
+                    result.push(factor.clone());
+                }
+            }
+        }
+        result.sort_by_key(Poly::degree);
+        result
     }
 }
 

@@ -36,17 +36,19 @@ Planned:
 **Matrix Operations**
 
 Currently supported:
-
-Planned:
 * Multiplication, general utilities
 * Random generation methods
-* Gaussian elimination, with Markov-Patel-Hayes' improvement
+* Gaussian elimination
 * (P)L(D)U decompositions and linear solvers
 * Rank calculation and decomposition
-* Lempel's symmetric factorization
 * The Frobenius / rational normal form
-* Block-wise decompositions
 * Characteristic and minimal polynomials, maximal vectors
+* Krylov subspaces
+
+Planned:
+* Markov-Patel-Hayes' algorithm
+* Lempel's symmetric factorization
+* Block-wise decompositions
 
 **Polynomial Operations**
 
@@ -54,11 +56,11 @@ Currently supported:
 * Arithmetic, Euclidean division
 * Extended GCD and Bezout's algorithm
 * Differentiation
-
-Planned:
 * Square-free factorization
 * Factorization into irreducibles
 * Irreducibility testing
+
+Planned:
 * Berlekamp-Massey
 
 ## Examples

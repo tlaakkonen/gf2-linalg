@@ -1,6 +1,6 @@
 use crate::GF2;
 
-use std::{fmt::{Debug, Display}, ops::{Add, AddAssign, Bound, Index, IndexMut, Mul, MulAssign, RangeBounds, Sub, SubAssign}};
+use std::{borrow::Borrow, fmt::{Debug, Display}, ops::{Add, AddAssign, Bound, Index, IndexMut, Mul, MulAssign, RangeBounds, Sub, SubAssign}};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Matrix {
@@ -51,9 +51,56 @@ impl Matrix {
         Matrix { data: vec![elem], shape: (1, 1) }
     }
 
+    pub fn basis_vector(n: usize, i: usize) -> Matrix {
+        let mut data = vec![GF2::ZERO; n];
+        data[i] = GF2::ONE;
+        Matrix { data, shape: (n, 1) }
+    }
+
     pub fn from_data(data: Vec<GF2>, shape: (usize, usize)) -> Matrix {
         assert_eq!(data.len(), shape.0 * shape.1);
         Matrix { data, shape }
+    }
+
+    pub fn block_diagonal(blocks: &[impl Borrow<Matrix>]) -> Matrix {
+        assert!(
+            blocks.iter().all(|b|  b.borrow().is_square()),
+            "cannot assemble block-diagonal matrix from non-square blocks of shape {:?}",
+            blocks.iter().map(|b| b.borrow().shape).collect::<Vec<_>>()
+        );
+        let size = blocks.iter().map(|b| b.borrow().shape.1).sum::<usize>();
+        let mut data = Vec::with_capacity(size * size);
+        let mut offset = 0;
+        for block in blocks {
+            let block: &Matrix = block.borrow();
+            for i in 0..block.shape.0 {
+                data.resize(data.len() + offset, GF2::ZERO);
+                data.extend_from_slice(&block.data[i*block.shape.1..(i+1)*block.shape.1]);
+                data.resize(data.len() + size - block.shape.1 - offset, GF2::ZERO);
+            }
+            offset += block.shape.1;
+        }
+        Matrix { data, shape: (size, size) }
+    }
+
+    pub fn is_zeros(&self) -> bool {
+        self.data.iter().all(|&elem| elem == GF2::ZERO)
+    }
+
+    pub fn is_identity(&self) -> bool {
+        self.data.iter().enumerate().all(|(i, &elem)| elem == (i / self.shape.1 == i % self.shape.1).into())
+    }
+
+    pub fn is_ones(&self) -> bool {
+        self.data.iter().all(|&elem| elem == GF2::ONE)
+    }
+
+    pub fn is_square(&self) -> bool {
+        self.shape.0 == self.shape.1
+    }
+
+    pub fn fill(&mut self, value: GF2) {
+        self.data.fill(value)
     }
 
     #[cfg(feature = "rand")]
@@ -62,6 +109,20 @@ impl Matrix {
             data: (0..rows * cols).map(|_| rng.random()).collect(),
             shape: (rows, cols)
         }
+    }
+
+    #[cfg(feature = "rand")]
+    pub fn random_invertible(rng: &mut impl rand::Rng, n: usize) -> Matrix {
+        loop {
+            let mat = Matrix::random(rng, n, n);
+            if mat.is_invertible() {
+                return mat
+            }
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item=GF2> {
+        self.data.iter().copied()
     }
 }
 
@@ -207,6 +268,48 @@ impl Matrix {
         let num_elements = self.shape.0 * self.shape.1;
         self.reshape(num_elements, 1)
     }
+
+    pub fn hconcat(&self, other: &Matrix) -> Matrix {
+        Matrix::hstack(&[self, other])
+    }
+
+    pub fn hstack(mats: &[impl Borrow<Matrix>]) -> Matrix {
+        assert!(mats.len() > 0, "cannot stack list of empty matrices");
+        let height = mats[0].borrow().shape.0;
+        assert!(
+            mats.iter().all(|m| m.borrow().shape.0 == height), 
+            "cannot hstack matrices of shapes {:?}", mats.iter().map(|m| m.borrow().shape).collect::<Vec<_>>()
+        );
+        let width = mats.iter().map(|m| m.borrow().shape.1).sum::<usize>();
+        let mut data = Vec::with_capacity(height * width);
+        for i in 0..height {
+            for mat in mats {
+                let mat = mat.borrow();
+                data.extend_from_slice(&mat.data[i*mat.shape.1..(i+1)*mat.shape.1]);
+            }
+        }
+
+        Matrix { data, shape: (height, width) }
+    }
+
+    pub fn vconcat(&self, other: &Matrix) -> Matrix {
+        Matrix::vstack(&[self, other])
+    }
+
+    pub fn vstack(mats: &[impl Borrow<Matrix>]) -> Matrix {
+        assert!(mats.len() > 0, "cannot stack list of empty matrices");
+        let width = mats[0].borrow().shape.1;
+        assert!(
+            mats.iter().all(|m| m.borrow().shape.1 == width),
+            "cannot vstack matrices of shapes {:?}", mats.iter().map(|m| m.borrow().shape).collect::<Vec<_>>()
+        );
+        let height = mats.iter().map(|m| m.borrow().shape.0).sum::<usize>();
+        let mut data = Vec::with_capacity(height * width);
+        for mat in mats {
+            data.extend_from_slice(&mat.borrow().data);
+        }
+        Matrix { data, shape: (height, width) }
+    }
 }
 
 impl Index<(usize, usize)> for Matrix {
@@ -245,8 +348,12 @@ impl Add<&Matrix> for &Matrix {
     }
 }
 impl Add<Matrix> for &Matrix { type Output = Matrix; fn add(self, rhs: Matrix) -> Matrix { self + &rhs } }
+impl Add<&Matrix> for Matrix { type Output = Matrix; fn add(self, rhs: &Matrix) -> Matrix { &self + rhs } }
+impl Add<Matrix> for Matrix { type Output = Matrix; fn add(self, rhs: Matrix) -> Matrix { &self + &rhs } }
 impl Sub<&Matrix> for &Matrix { type Output = Matrix; fn sub(self, rhs: &Matrix) -> Matrix { self + rhs } }
 impl Sub<Matrix> for &Matrix { type Output = Matrix; fn sub(self, rhs: Matrix) -> Matrix { self + &rhs } }
+impl Sub<&Matrix> for Matrix { type Output = Matrix; fn sub(self, rhs: &Matrix) -> Matrix { &self + rhs } }
+impl Sub<Matrix> for Matrix { type Output = Matrix; fn sub(self, rhs: Matrix) -> Matrix { &self + &rhs } }
 
 impl AddAssign<&Matrix> for Matrix {
     fn add_assign(&mut self, rhs: &Matrix) {
@@ -270,6 +377,8 @@ impl Mul<&Matrix> for &Matrix {
     }
 }
 impl Mul<Matrix> for &Matrix { type Output = Matrix; fn mul(self, rhs: Matrix) -> Matrix { self * &rhs } }
+impl Mul<&Matrix> for Matrix { type Output = Matrix; fn mul(self, rhs: &Matrix) -> Matrix { &self * rhs } }
+impl Mul<Matrix> for Matrix { type Output = Matrix; fn mul(self, rhs: Matrix) -> Matrix { &self * &rhs } }
 
 impl MulAssign<&Matrix> for Matrix {
     fn mul_assign(&mut self, rhs: &Matrix) {
