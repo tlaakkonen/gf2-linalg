@@ -19,7 +19,7 @@ The goals of the project are to be:
 * **Self-contained**: Pure Rust implementation to make building and linking as easy as possible. Minimal dependencies to avoid version conflicts and keep compile times fast. So far the only dependency is `rand` and it's optional.
 
 I also have some explicit anti-goals:
-* **Extremely high performance**: While I'm not trying to write slow code, I'm not worrying about performance at the moment. For example, matrices are currently implemented without SIMD. If you need to work with 10000x10000 matrices, you may want to look elsewhere. There are plenty of fast Rust matrix libraries.
+* **Extremely high performance**: While I'm not trying to write slow code, I'm not worrying about performance at the moment. For example, matrices are currently implemented without SIMD or even SWAR. If you need to work with 10000x10000 matrices, you may want to look elsewhere. There are plenty of fast Rust matrix libraries.
 * **Other finite fields**: This crate focuses on the binary finite field, and the special structure that this affords. There is no plan to support arbitrary finite fields, consider the `galois` Python package if you need that.
 * **Objects except matrices and univariate polynomials**: I am not planning to support objects like polynomial rings, ideals, etc. Most of the operations on these objects can be phrased in terms of polynomials and matrices, so consider this if you want to work with these objects (or consider using SageMath instead). I am not currently planning to support multivariate polynomials, but I may reconsider.
 
@@ -30,6 +30,7 @@ I also have some explicit anti-goals:
 Currently supported:
 
 Planned:
+* Linear subspaces with set-like operations
 * Python bindings
 * `ndarray` interface
 
