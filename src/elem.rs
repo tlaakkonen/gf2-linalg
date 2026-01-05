@@ -139,3 +139,15 @@ impl rand::distr::Distribution<GF2> for rand::distr::StandardUniform {
     }
 }
 
+impl std::iter::Sum for GF2 {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(GF2::ZERO, std::ops::Add::add)
+    }
+}
+
+impl std::iter::Product for GF2 {
+    fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(GF2::ONE, std::ops::Mul::mul)
+    }
+}
+

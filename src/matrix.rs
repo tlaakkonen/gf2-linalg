@@ -1,6 +1,6 @@
 use crate::GF2;
 
-use std::{borrow::Borrow, fmt::{Debug, Display}, ops::{Add, AddAssign, Bound, Index, IndexMut, Mul, MulAssign, RangeBounds, Sub, SubAssign}};
+use std::{borrow::Borrow, fmt::{Debug, Display}, ops::{Add, AddAssign, Index, IndexMut, Mul, MulAssign, Sub, SubAssign}};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Matrix {
@@ -99,6 +99,10 @@ impl Matrix {
         self.shape.0 == self.shape.1
     }
 
+    pub fn hamming_weight(&self) -> usize {
+        self.data.iter().copied().map(bool::from).map(usize::from).sum::<usize>()
+    }
+
     pub fn fill(&mut self, value: GF2) {
         self.data.fill(value)
     }
@@ -152,26 +156,88 @@ impl Display for Matrix {
     }
 }
 
-pub trait SliceBounds: private::SliceBounds {}
+pub trait Slice<'r>: private::Slice<'r> {}
 
+use private::SliceIndices;
 mod private {
-    use std::ops::RangeBounds;
+    #[derive(Clone)]
+    pub enum SliceIndices<'r> {
+        Range(std::ops::Range<usize>),
+        Slice(&'r [usize])
+    }
 
-    pub trait SliceBounds {
-        fn to_range_bounds(self) -> impl RangeBounds<usize>;
+    impl<'r> SliceIndices<'r> {
+        pub fn len(&self) -> usize {
+            match self {
+                SliceIndices::Range(r) => r.end - r.start,
+                SliceIndices::Slice(s) => s.len()
+            }
+        }
+    }
+
+    impl<'r> std::fmt::Display for SliceIndices<'r> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                SliceIndices::Range(r) => write!(f, "{}..{}", r.start, r.end),
+                SliceIndices::Slice(s) => write!(f, "{:?}", s)
+            }
+        }
+    }
+
+    impl<'r> Iterator for SliceIndices<'r> {
+        type Item = usize;
+        fn next(&mut self) -> Option<Self::Item> {
+            match self {
+                SliceIndices::Range(r) => (r.start < r.end).then(|| { r.start += 1; r.start - 1 }),
+                SliceIndices::Slice(s) => s.split_first().map(|(&val, ns)| { *s = ns; val })
+            }
+        }
+    }
+
+    pub trait Slice<'r> {
+        fn to_slice_indices(self, len: usize) -> (SliceIndices<'r>, bool);
     }
 }
 
-impl SliceBounds for usize {}
-impl private::SliceBounds for usize {
-    fn to_range_bounds(self) -> impl RangeBounds<usize> { self..=self }
+impl<'r> Slice<'r> for usize {}
+impl<'r> private::Slice<'r> for usize {
+    fn to_slice_indices(self, len: usize) -> (SliceIndices<'r>, bool) { 
+        (SliceIndices::Range(self..self+1), self < len)
+    }
+}
+
+impl<'r> Slice<'r> for &'r [usize] {}
+impl<'r> private::Slice<'r> for &'r [usize] {
+    fn to_slice_indices(self, len: usize) -> (SliceIndices<'r>, bool) { 
+        (SliceIndices::Slice(self), self.iter().all(|&i| i < len))
+    }
+}
+
+impl<'r, const N: usize> Slice<'r> for &'r [usize; N] {}
+impl<'r, const N: usize> private::Slice<'r> for &'r [usize; N] {
+    fn to_slice_indices(self, len: usize) -> (SliceIndices<'r>, bool) { self.as_slice().to_slice_indices(len) }
 }
 
 macro_rules! impl_slice_bounds {
     ($($t:ty),*) => {$(
-        impl SliceBounds for $t {}
-        impl private::SliceBounds for $t {
-            fn to_range_bounds(self) -> impl RangeBounds<usize> { self }
+        impl<'r> Slice<'r> for $t {}
+        impl<'r> private::Slice<'r> for $t {
+            fn to_slice_indices(self, len: usize) -> (SliceIndices<'r>, bool) {
+                use std::ops::{RangeBounds, Bound};
+
+                let start = match self.start_bound() {
+                    Bound::Unbounded => 0,
+                    Bound::Included(&v) => v,
+                    Bound::Excluded(&v) => v + 1
+                };
+                let end = match self.end_bound() {
+                    Bound::Unbounded => len,
+                    Bound::Included(&v) => v + 1,
+                    Bound::Excluded(&v) => v
+                };
+
+                (SliceIndices::Range(start..end), start <= end && end <= len)
+            }
         }
     )*};
 }
@@ -182,34 +248,24 @@ impl_slice_bounds!(
 );
 
 impl Matrix {
-    pub fn slice(&self, rows: impl SliceBounds, cols: impl SliceBounds) -> Matrix {
-        fn to_bound(b: impl RangeBounds<usize>, len: usize) -> (usize, usize) {
-            let start = match b.start_bound() {
-                Bound::Unbounded => 0,
-                Bound::Included(&v) => v,
-                Bound::Excluded(&v) => v + 1
-            };
-            let end = match b.end_bound() {
-                Bound::Unbounded => len,
-                Bound::Included(&v) => v + 1,
-                Bound::Excluded(&v) => v
-            };
-            (start, end)
-        }
-
-        let rows = to_bound(rows.to_range_bounds(), self.shape.0);
-        let cols = to_bound(cols.to_range_bounds(), self.shape.1);
+    pub fn slice<'m>(&'m self, rows: impl Slice<'m>, cols: impl Slice<'m>) -> Matrix {
+        let (rows, rvalid) = rows.to_slice_indices(self.shape.0);
+        let (cols, cvalid) = cols.to_slice_indices(self.shape.1);
         assert!(
-            rows.1 <= self.shape.0 && cols.1 <= self.shape.1 && rows.0 <= rows.1 && cols.0 <= cols.1, 
-            "slice ({}..{}, {}..{}) is out of bounds for matrix of size {:?}", 
-            rows.0, rows.1, cols.0, cols.1, self.shape
+            rvalid && cvalid, 
+            "slice ({}, {}) is out of bounds for matrix of size {:?}", 
+            rows, cols, self.shape
         );
 
-        let mut data = Vec::with_capacity((rows.1 - rows.0) * (cols.1 - cols.0));
-        for row in rows.0..rows.1 {
-            data.extend_from_slice(&self.data[self.shape.1 * row + cols.0 .. self.shape.1 * row + cols.1]);
+        let mut data = Vec::with_capacity(rows.len() * cols.len());
+        for row in rows.clone() {
+            match &cols {
+                SliceIndices::Range(cols) => data.extend_from_slice(&self.data[self.shape.1 * row + cols.start .. self.shape.1 * row + cols.end]),
+                SliceIndices::Slice(cols) => data.extend(cols.iter().map(|&col| self.data[self.shape.1 * row + col]))
+            }
+            
         }
-        Matrix { data, shape: (rows.1 - rows.0, cols.1 - cols.0) }
+        Matrix { data, shape: (rows.len(), cols.len()) }
     }
 
     pub fn row(&self, row: usize) -> Matrix {

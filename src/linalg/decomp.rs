@@ -63,6 +63,34 @@ impl Matrix {
 }
 
 #[derive(Debug, Clone)]
+pub struct FullRankSymmetricDecomposition {
+    pub lam: Matrix,
+    pub m: Matrix
+}
+
+impl Matrix {
+    pub fn full_rank_symmetric_decomposition(&self) -> FullRankSymmetricDecomposition {
+        assert!(&self.transpose() == self, "matrix must be symmetric");
+        let n = self.shape.0;
+
+        let mut m = Matrix::eye(n);
+        for j in 0..n {
+            for i in j+1..n {
+                m[(i, j)] = (0..j).map(|k| m[(i, k)] * m[(j, k)]).sum::<GF2>() + self[(i, j)];
+            }
+        }
+
+        let mut lam = Matrix::zeros(n, n);
+        for i in 0..n {
+            lam[(i, i)] = (0..n).map(|k| m[(i, k)] * m[(i, k)]).sum::<GF2>() + self[(i, i)];
+        }
+
+        FullRankSymmetricDecomposition { lam, m }
+    }
+}
+
+
+#[derive(Debug, Clone)]
 pub struct KrylovSubspace {
     pub action: Matrix,
     pub basis: Matrix,
