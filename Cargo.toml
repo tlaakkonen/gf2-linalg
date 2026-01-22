@@ -9,3 +9,8 @@ default = ["rand"]
 [dependencies.rand]
 version = "0.9"
 optional = true
+default-features = false
+
+[dev-dependencies.rand]
+version = "0.9"
+default-features = true
