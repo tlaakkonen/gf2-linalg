@@ -45,6 +45,10 @@ impl LinearSpace {
         }
     }
 
+    pub fn basis(&self) -> &Matrix {
+        &self.basis
+    }
+
     pub fn dim(&self) -> usize {
         self.basis.num_rows()
     }
