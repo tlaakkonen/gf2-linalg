@@ -1,5 +1,7 @@
 use super::*;
 
+/// Decompose A = P.T @ L @ U
+/// P is a permutation matrix, L is lower triangular, U is upper triangular
 #[derive(Debug, Clone)]
 pub struct PLUDecomposition {
     pub pt: Matrix,
@@ -30,6 +32,17 @@ impl Matrix {
     }
 }
 
+#[test]
+fn plu_decomp_roundtrip() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random(&mut rng, 10, 10);
+        let plu = mat.plu_decomposition();
+        assert_eq!(plu.pt.transpose().dot(&plu.l).dot(&plu.u), mat);
+    }
+}
+
 impl PLUDecomposition {
     pub fn solve(&self, rhs: &Matrix) -> Option<Matrix> {
         let pb = self.pt.dot(rhs);
@@ -38,6 +51,20 @@ impl PLUDecomposition {
     }
 }
 
+#[test]
+fn plu_decomp_solve() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random_invertible(&mut rng, 10);
+        let rhs = Matrix::random(&mut rng, 10, 5);
+        let plu = mat.plu_decomposition();
+        assert_eq!(plu.solve(&rhs), mat.solve(&rhs));
+    }
+}
+
+/// Decompose A = CF
+/// C is n x rank(A), F is rank(A) x m
 #[derive(Debug, Clone)]
 pub struct RankDecomposition {
     pub c: Matrix,
@@ -62,6 +89,19 @@ impl Matrix {
     }
 }
 
+#[test]
+fn rank_decomp_roundtrip() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random(&mut rng, 10, 10);
+        let rd = mat.rank_decomposition();
+        assert_eq!(rd.c.dot(&rd.f), mat);
+    }
+}
+
+/// For symmetric A, decompose A = MM^T + lam 
+/// lam is diagonal, M is invertible
 #[derive(Debug, Clone)]
 pub struct FullRankSymmetricDecomposition {
     pub lam: Matrix,
@@ -131,6 +171,31 @@ impl Matrix {
         let bch = ibch.inverse().unwrap();
         let action = ibch.dot(self).dot(&bch);
         KrylovSubspace { action, basis: bch, dual_basis: ibch, rank, min_poly }
+    }
+}
+
+#[test]
+fn krylov_min_poly_vanish() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random(&mut rng, 10, 10);
+        let vec = Matrix::random(&mut rng, 10, 1);
+        let poly = mat.minimal_polynomial_of(&vec);
+        assert!(mat.eval_poly(&poly, &vec).is_zeros())
+    }
+}
+
+#[test]
+fn krylov_min_poly_div_total() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random(&mut rng, 10, 10);
+        let minpoly = mat.minimal_polynomial();
+        let vec = Matrix::random(&mut rng, 10, 1);
+        let minpoly_vec = mat.minimal_polynomial_of(&vec);
+        assert!(minpoly.rem(&minpoly_vec).is_zero());
     }
 }
 
@@ -271,3 +336,25 @@ impl Matrix {
     }
 }
 
+#[test]
+fn min_poly_vanish() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random(&mut rng, 10, 10);
+        let minpoly = mat.minimal_polynomial();
+        assert!(mat.eval_poly(&minpoly, &Matrix::eye(10)).is_zeros());
+    }
+}
+
+#[test]
+fn min_poly_divide_char_poly() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random(&mut rng, 10, 10);
+        let minpoly = mat.minimal_polynomial();
+        let charpoly = mat.characteristic_polynomial();
+        assert!(charpoly.rem(&minpoly).is_zero());
+    }
+}

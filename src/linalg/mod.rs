@@ -87,6 +87,22 @@ impl Matrix {
         target
     }
 
+    pub fn row_sum(&self, i: usize) -> GF2 {
+        (0..self.shape.1).map(|j| self[(i, j)]).sum()
+    }
+
+    pub fn row_weight(&self, i: usize) -> usize {
+        (0..self.shape.1).map(|j| self[(i, j)]).sum()
+    }
+
+    pub fn col_sum(&self, j: usize) -> GF2 {
+        (0..self.shape.0).map(|i| self[(i, j)]).sum()
+    }
+
+    pub fn col_weight(&self, j: usize) -> usize {
+        (0..self.shape.0).map(|i| self[(i, j)]).sum()
+    }
+
     pub fn row_add(&mut self, source: usize, target: usize) {
         for i in 0..self.shape.1 {
             let value = self[(source, i)];
@@ -353,11 +369,23 @@ impl Matrix {
                 for k in 0..rhs.shape.1 {
                     sol[(i, k)] += rhs[(i, k)];
                 }
-                for j in 0..pivot {
-                    if self[(i, j)] == GF2::ONE {
-                        for k in 0..rhs.shape.1 {
-                            let value = sol[(j, k)];
-                            sol[(i, k)] += value;
+
+                if lower {
+                    for j in 0..pivot {
+                        if self[(i, j)] == GF2::ONE {
+                            for k in 0..rhs.shape.1 {
+                                let value = sol[(j, k)];
+                                sol[(i, k)] += value;
+                            }
+                        }
+                    }
+                } else {
+                    for j in pivot+1..self.shape.1 {
+                        if self[(i, j)] == GF2::ONE {
+                            for k in 0..rhs.shape.1 {
+                                let value = sol[(j, k)];
+                                sol[(i, k)] += value;
+                            }
                         }
                     }
                 }
@@ -380,3 +408,69 @@ impl Matrix {
     }
 }
 
+#[test]
+fn solve_invertible_roundtrip() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random_invertible(&mut rng, 10);
+        let vec = Matrix::random(&mut rng, 10, 5);
+        assert_eq!(mat.dot(&mat.solve(&vec).unwrap()), vec);
+    }
+}
+
+#[test]
+fn solve_invertible_inverse() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random_invertible(&mut rng, 10);
+        let vec = Matrix::random(&mut rng, 10, 1);
+        let imat = mat.inverse().unwrap();
+        assert_eq!(mat.solve(&vec).unwrap(), imat.dot(&vec));
+    }
+}
+
+#[test]
+fn inverse_roundtrip() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random_invertible(&mut rng, 10);
+        assert_eq!(mat.inverse().and_then(|m| m.inverse()), Some(mat));
+    }
+}
+
+#[test]
+fn solve_triangular_upper_invertible() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mut mat = Matrix::random(&mut rng, 10, 10);
+        for i in 0..10 {
+            mat[(i, i)] = GF2::ONE;
+            for j in i+1..10 {
+                mat[(j, i)] = GF2::ZERO;
+            }
+        }
+        let rhs = Matrix::random(&mut rng, 10, 5);
+        assert_eq!(mat.solve(&rhs), mat.solve_triangular(false, &rhs));
+    }
+}
+
+#[test]
+fn solve_triangular_lower_invertible() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mut mat = Matrix::random(&mut rng, 10, 10);
+        for i in 0..10 {
+            mat[(i, i)] = GF2::ONE;
+            for j in 0..i {
+                mat[(j, i)] = GF2::ZERO;
+            }
+        }
+        let rhs = Matrix::random(&mut rng, 10, 5);
+        assert_eq!(mat.solve(&rhs), mat.solve_triangular(true, &rhs));
+    }
+}
