@@ -145,6 +145,12 @@ impl std::iter::Sum for GF2 {
     }
 }
 
+impl std::iter::Sum<GF2> for usize {
+    fn sum<I: Iterator<Item = GF2>>(iter: I) -> usize {
+        iter.filter(|&e| e == GF2::ONE).count()
+    }
+}
+
 impl std::iter::Product for GF2 {
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
         iter.fold(GF2::ONE, std::ops::Mul::mul)

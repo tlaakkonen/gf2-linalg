@@ -2,10 +2,10 @@ use crate::GF2;
 
 use std::{borrow::Borrow, fmt::{Debug, Display}, ops::{Add, AddAssign, Index, IndexMut, Mul, MulAssign, Sub, SubAssign}};
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Matrix {
-    data: Vec<GF2>,
-    pub shape: (usize, usize)
+    pub shape: (usize, usize),
+    data: Vec<GF2>
 }
 
 impl Matrix {
@@ -37,6 +37,18 @@ impl Matrix {
 
     pub fn ones_like(mat: &Matrix) -> Matrix {
         Matrix::ones(mat.shape.0, mat.shape.1)
+    }
+
+    pub fn row_vector(i: usize, n: usize) -> Matrix {
+        let mut mat = Matrix::zeros(1, n);
+        mat[(0, i)] = GF2::ONE;
+        mat
+    }
+
+    pub fn col_vector(i: usize, n: usize) -> Matrix {
+        let mut mat = Matrix::zeros(n, 1);
+        mat[(i, 0)] = GF2::ONE;
+        mat
     }
 
     pub fn eye(n: usize) -> Matrix {
@@ -365,6 +377,31 @@ impl Matrix {
             data.extend_from_slice(&mat.borrow().data);
         }
         Matrix { data, shape: (height, width) }
+    }
+
+    pub fn vappend(&mut self, other: &Matrix) {
+        assert_eq!(other.shape.1, self.shape.1, 
+            "cannot vappend matrix of shape {:?} to matrix of shape {:?}", other.shape, self.shape
+        );
+        self.data.extend_from_slice(&other.data);
+        self.shape.0 += other.shape.0;
+    }
+
+    pub fn swap_remove_row(&mut self, i: usize) {
+        self.row_swap(i, self.num_rows() - 1);
+        self.shape.0 -= 1;
+        self.data.truncate(self.shape.0 * self.shape.1);
+    }
+
+    pub fn remove_col(&mut self, i: usize) {
+        let mut idx = 0;
+        self.data.retain(|_| {
+            let ret = idx != i;
+            idx += 1;
+            if idx >= self.shape.1 { idx -= self.shape.1; }
+            ret
+        });
+        self.shape.1 -= 1;
     }
 }
 
