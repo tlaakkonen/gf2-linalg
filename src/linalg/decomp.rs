@@ -129,6 +129,176 @@ impl Matrix {
     }
 }
 
+#[test]
+fn frsd_roundtrip() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mut mat = Matrix::random(&mut rng, 10, 10);
+        for i in 0..10 {
+            for j in i+1..10 {
+                mat[(j, i)] = mat[(i, j)]
+            }
+        }
+        let frsd = mat.full_rank_symmetric_decomposition();
+        assert_eq!(mat, frsd.m.dot(&frsd.m.transpose()) + frsd.lam)
+    }
+}
+
+/// For symmetric A, decompose A = MRM^T where M is invertible and R is block-diagonal. 
+/// Each block is either [1], [[0,1],[1,0]] or [0], organized in this order.
+/// num_i and num_h, respectively, indicate that the first num_i and next num_h 
+/// blocks are [1] or [[0,1],[1,0]], respectively.
+pub struct WittDecomposition {
+    pub r: Matrix,
+    pub m: Matrix,
+    pub num_i: usize,
+    pub num_h: usize
+}
+
+impl Matrix {
+    pub fn witt_decomposition(&self) -> WittDecomposition {
+        assert!(&self.transpose() == self, "matrix must be symmetric");
+
+        let mut num_i = 0;
+        let mut num_h = 0;
+        let mut r = self.clone();
+        let mut m = Matrix::eye(self.num_rows());
+        let mut idx = 0;
+        while idx < r.num_rows() {
+            if let Some(p) = (idx..r.num_rows()).find(|&i| r[(i, i)] == GF2::ONE) {
+                // Found an anisotropic part:
+                r.row_swap(p, idx);
+                r.col_swap(p, idx);
+                m.col_swap(idx, p);
+
+                for i in idx+1..r.num_rows() {
+                    if r[(idx, i)] == GF2::ONE {
+                        r.row_add(idx, i);
+                        r.col_add(idx, i);
+                        m.col_add(i, idx);
+                    }
+                }
+
+                num_i += 1;
+                idx += 1;
+            } else if let Some((pi, pj)) = (idx..r.num_rows())
+                .map(|j| (j+1..r.num_rows()).map(move |i| (i, j)))
+                .flatten()
+                .find(|&(i, j)| r[(i, j)] == GF2::ONE) {
+                // Found a hyperbolic part:
+                r.row_swap(pj, idx);
+                r.col_swap(pj, idx);
+                r.row_swap(pi, idx+1);
+                r.col_swap(pi, idx+1);
+                m.col_swap(idx, pj);
+                m.col_swap(idx+1, pi);
+
+                for i in idx+2..r.num_rows() {
+                    if r[(idx, i)] == GF2::ONE {
+                        r.row_add(idx+1, i);
+                        r.col_add(idx+1, i);
+                        m.col_add(i, idx+1);
+                    }
+                }
+
+                r.row_swap(idx, idx+1);
+                r.col_swap(idx, idx+1);
+                m.col_swap(idx+1, idx);
+
+                for i in idx+2..r.num_rows() {
+                    if r[(idx, i)] == GF2::ONE {
+                        r.row_add(idx+1, i);
+                        r.col_add(idx+1, i);
+                        m.col_add(i, idx+1);
+                    }
+                }
+
+                num_h += 1;
+                idx += 2;
+            } else {
+                // No more non-zero elements, can stop early
+                break
+            }
+        }
+
+        WittDecomposition { r, m, num_i, num_h }
+    }
+}
+
+#[test]
+fn witt_decomposition_roundtrip() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mut mat = Matrix::random(&mut rng, 10, 10);
+        for i in 0..mat.num_rows() {
+            for j in i+1..mat.num_rows() {
+                mat[(j, i)] = mat[(i, j)]
+            }
+        }
+        let witt = mat.witt_decomposition();
+        assert_eq!(mat, witt.m.dot(&witt.r).dot(&witt.m.transpose()));
+    }
+}
+
+/// For symmetric A, decompose A = MM^T
+/// M is either n x rank(A) or n x (rank(A) + 1) if A is alternating
+pub struct SymmetricRankDecomposition {
+    pub m: Matrix 
+}
+
+impl Matrix {
+    pub fn symmetric_rank_decomposition(&self) -> SymmetricRankDecomposition {
+        if self.is_zeros() {
+            return SymmetricRankDecomposition { m: Matrix::zeros(self.num_rows(), 0) }
+        }
+
+        let witt = self.witt_decomposition();
+        if witt.num_i == 0 {
+            let m = witt.m.slice(.., ..2*witt.num_h);
+            let mut a = Matrix::zeros(2*witt.num_h, 2*witt.num_h + 1);
+            for i in 0..a.num_rows() {
+                for j in i..a.num_cols() {
+                    a[(i, j)] = GF2::ONE;
+                }
+                if i % 2 == 0 {
+                    a[(i, i + 1)] = GF2::ZERO;
+                }
+            }
+            SymmetricRankDecomposition { m: m.dot(&a) }
+        } else {
+            let m1 = witt.m.slice(.., ..witt.num_i-1);
+            let m2 = witt.m.slice(.., witt.num_i-1..witt.num_i+2*witt.num_h);
+            let mut a = Matrix::zeros(1+2*witt.num_h, 1+2*witt.num_h);
+            for i in 0..a.num_rows() {
+                for j in i.saturating_sub(1)..a.num_cols() {
+                    a[(i, j)] = GF2::ONE;
+                }
+                if i % 2 == 1 {
+                    a[(i, i)] = GF2::ZERO;
+                }
+            }
+            SymmetricRankDecomposition { m: m1.hconcat(&m2.dot(&a)) }
+        }
+    }
+}
+
+#[test]
+fn symmetric_rank_decomposition_roundtrip() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([43; 32]);
+    for _ in 0..1000 {
+        let mut mat = Matrix::random(&mut rng, 10, 10);
+        for i in 0..mat.num_rows() {
+            for j in i+1..mat.num_rows() {
+                mat[(j, i)] = mat[(i, j)]
+            }
+        }
+        let srd = mat.symmetric_rank_decomposition();
+        assert_eq!(mat, srd.m.dot(&srd.m.transpose()));
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct KrylovSubspace {
