@@ -1,7 +1,7 @@
 mod elem;
 mod poly;
 mod matrix;
-mod linalg;
+pub mod linalg;
 mod space;
 
 pub use elem::*;

@@ -445,7 +445,7 @@ impl Matrix {
         }
 
         let qt = mu_w.quot(&d);
-        let h = qt.pow(d.degree()).gcd(&d);
+        let h = d.gcd(&qt.pow_mod(d.degree(), &d));
         let k = d.quot(&h);
         let v2 = self.eval_poly(&h, v);
         let w2 = self.eval_poly(&k, w);
@@ -521,7 +521,10 @@ impl Matrix {
         let mut invariant_factors = Vec::new();
         while total_k < n {
             if t.is_identity() {
-                indices.extend(total_k+1..n+1);
+                for i in total_k+1..n+1 {
+                    invariant_factors.push(Poly::one());
+                    indices.push(i);
+                }
                 break;
             }
 
@@ -573,5 +576,125 @@ fn min_poly_divide_char_poly() {
         let minpoly = mat.minimal_polynomial();
         let charpoly = mat.characteristic_polynomial();
         assert!(charpoly.rem(&minpoly).is_zero());
+    }
+}
+
+#[test]
+fn rational_canonical_form_roundtrip() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random(&mut rng, 10, 10);
+        let rcf = mat.rational_canonical_form();
+        assert_eq!(rcf.basis.dot(&rcf.normal_form).dot(&rcf.dual_basis), mat);
+        assert_eq!(rcf.indices.len(), rcf.invariant_factors.len() + 1);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GeneralizedJordanForm {
+    pub normal_form: Matrix,
+    pub indices: Vec<usize>,
+    pub basis: Matrix,
+    pub dual_basis: Matrix,
+    pub irreducible_factors: Vec<(Poly, usize)>
+}
+
+impl RationalCanonicalForm {
+    pub fn generalized_jordan_form(&self) -> GeneralizedJordanForm {
+        let mut block_bchs = Vec::new();
+        let mut block_ibchs = Vec::new();
+        let mut irreducible_factors = Vec::new();
+        let mut indices = vec![0];
+        for (i, f) in self.invariant_factors.iter().enumerate() {
+            let block = self.normal_form.slice(
+                self.indices[i]..self.indices[i+1], self.indices[i]..self.indices[i+1]
+            );
+
+            let factors = f.factor_with_multiplicities();
+            if factors.len() == 1 && factors[0].1 == 1 {
+                irreducible_factors.push((f.clone(), 1));
+                indices.push(self.indices[i + 1]);
+                block_bchs.push(Matrix::eye(block.num_rows()));
+                block_ibchs.push(Matrix::eye(block.num_rows()));
+                continue
+            }
+
+            let mut bvecs = Vec::new();
+            for (irred, pow) in factors {
+                irreducible_factors.push((irred.clone(), pow));
+                indices.push(indices[indices.len() - 1] + irred.degree() * pow);
+
+                let compl = f.quot(&irred.pow(pow));
+                let v = block.eval_poly(&compl, &Matrix::basis_vector(block.num_rows(), 0));
+                for j in 0..pow {
+                    let mut u = block.eval_poly(&irred.pow(j), &v);
+                    for _ in 0..irred.degree() {
+                        bvecs.push(u.clone());
+                        u = block.dot(&u);
+                    }
+                }
+            }
+
+            let basis = Matrix::hstack(&bvecs);
+            let mut t = basis.clone();
+            t.row_reduce();
+            let ibasis = basis.inverse().unwrap();
+            block_bchs.push(basis);
+            block_ibchs.push(ibasis);
+        }
+
+        let bch = Matrix::block_diagonal(&block_bchs);
+        let ibch = Matrix::block_diagonal(&block_ibchs);
+        let normal_form = ibch.dot(&self.normal_form).dot(&bch);
+        let bch = self.basis.dot(&bch);
+        let ibch = ibch.dot(&self.dual_basis);
+
+        GeneralizedJordanForm { 
+            normal_form, indices, irreducible_factors,
+            basis: bch, dual_basis: ibch
+        }
+    }
+}
+
+impl Matrix {
+    pub fn generalized_jordan_form(&self) -> GeneralizedJordanForm {
+        self.rational_canonical_form().generalized_jordan_form()
+    }
+}
+
+#[test]
+fn nilpotent_gjf_mask() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mut mat = Matrix::random(&mut rng, 10, 10);
+        for i in 0..10 {
+            for j in 0..=i {
+                mat[(i, j)] = GF2::ZERO;
+            }
+        }
+        let gjf= mat.generalized_jordan_form();
+        let nf = gjf.normal_form;
+        for i in 0..10 {
+            for j in 0..10 {
+                assert!(nf[(i, j)] == GF2::ZERO || (i > 0 && j == i - 1));
+            }
+        }
+    }
+}
+
+#[test]
+fn generalized_jordan_form_roundtrip() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random(&mut rng, 10, 10);
+        let gjf = mat.generalized_jordan_form();
+        assert_eq!(gjf.basis.dot(&gjf.normal_form).dot(&gjf.dual_basis), mat);
+        let mask = Matrix::block_diagonal(&gjf.indices.iter().zip(&gjf.indices[1..])
+            .map(|(&a, &b)| Matrix::ones(b - a, b - a))
+            .collect::<Vec<_>>());
+        assert_eq!(&gjf.normal_form * &mask, gjf.normal_form);
     }
 }

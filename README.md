@@ -28,9 +28,9 @@ I also have some explicit anti-goals:
 **General Features**
 
 Currently supported:
+* Linear subspaces with set-like operations
 
 Planned:
-* Linear subspaces with set-like operations
 * Python bindings
 * `ndarray` interface
 
@@ -42,13 +42,16 @@ Currently supported:
 * Gaussian elimination
 * (P)L(D)U decompositions and linear solvers
 * Rank calculation and decomposition
+* Fitting decomposition
 * The Frobenius / rational normal form
+* The generalized Jordan normal form
 * Characteristic and minimal polynomials, maximal vectors
 * Krylov subspaces
+* Witt decomposition of symmetric matrices
+* Lempel's symmetric factorization
 
 Planned:
 * Markov-Patel-Hayes' algorithm
-* Lempel's symmetric factorization
 * Block-wise decompositions
 
 **Polynomial Operations**
