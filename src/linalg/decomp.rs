@@ -100,8 +100,7 @@ fn rank_decomp_roundtrip() {
     }
 }
 
-/// For symmetric A, decompose A = MM^T + lam 
-/// lam is diagonal, M is invertible
+/// For symmetric A, decompose A = MM^T + lam, where lam is diagonal, M is invertible
 #[derive(Debug, Clone)]
 pub struct FullRankSymmetricDecomposition {
     pub lam: Matrix,
@@ -167,7 +166,7 @@ impl Matrix {
         let mut idx = 0;
         while idx < r.num_rows() {
             if let Some(p) = (idx..r.num_rows()).find(|&i| r[(i, i)] == GF2::ONE) {
-                // Found an anisotropic part:
+                // Found an 'anisotropic' part:
                 r.row_swap(p, idx);
                 r.col_swap(p, idx);
                 m.col_swap(idx, p);
@@ -297,6 +296,54 @@ fn symmetric_rank_decomposition_roundtrip() {
         }
         let srd = mat.symmetric_rank_decomposition();
         assert_eq!(mat, srd.m.dot(&srd.m.transpose()));
+    }
+}
+
+/// For a matrix A, find invertible E, P, and nilpotent N such that A = P(E \oplus N)P^-1.
+#[derive(Debug, Clone)]
+pub struct FittingDecomposition {
+    pub invertible_part: Matrix,
+    pub nilpotent_part: Matrix,
+    pub basis: Matrix,
+    pub dual_basis: Matrix
+}
+
+impl Matrix {
+    pub fn fitting_decomposition(&self) -> FittingDecomposition {
+        let mut q = self.clone();
+        let mut r = q.rank();
+        loop {
+            let nq = q.dot(self);
+            let nr = nq.rank();
+            if r == nr {
+                break;
+            } else {
+                q = nq;
+                r = nr;
+            }
+        }
+        
+        let nsp = q.null_space();
+        q.col_reduce();
+        let basis = q.slice(.., ..r).hconcat(&nsp);
+        let dual_basis = basis.inverse().unwrap();
+        let form = dual_basis.dot(self).dot(&basis);
+        let invertible_part = form.slice(..r, ..r);
+        let nilpotent_part = form.slice(r.., r..);
+
+        FittingDecomposition { invertible_part, nilpotent_part, basis, dual_basis }
+    }
+}
+
+#[test]
+fn fitting_decomposition_roundtrip() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random(&mut rng, 10, 10);
+        let fd = mat.fitting_decomposition();
+        assert_eq!(fd.basis.dot(&Matrix::block_diagonal(&[&fd.invertible_part, &fd.nilpotent_part])).dot(&fd.dual_basis), mat);
+        assert_eq!(fd.invertible_part.determinant(), GF2::ONE);
     }
 }
 
