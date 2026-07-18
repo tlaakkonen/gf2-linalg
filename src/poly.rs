@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{Matrix, ToGF2, GF2};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -295,14 +297,22 @@ impl Poly {
         self.terms.iter_mut().for_each(|t| *t <<= k)
     }
 
-    pub fn pow(&self, n: usize) -> Poly {
+    fn powmod_opt(&self, n: usize, m: Option<&Poly>) -> Poly {
         match n {
             0 => Poly::one(),
-            1 => self.clone(),
+            1 => if let Some(m) = m {
+                self.rem(m)
+            } else {
+                self.clone()
+            },
             n if n.is_power_of_two() => {
                 let mut x = self.clone();
                 x.pow2k(n.trailing_zeros() as usize);
-                x
+                if let Some(m) = m {
+                    x.rem(m)
+                } else {
+                    x
+                }
             },
             mut n => {
                 let mut x = self.clone();
@@ -313,6 +323,9 @@ impl Poly {
                 n >>= k;
                 loop {
                     y *= &x;
+                    if let Some(m) = m {
+                        y = y.rem(&m);
+                    }
                     n >>= 1;
 
                     if n == 0 {
@@ -325,6 +338,14 @@ impl Poly {
                 }
             }
         }
+    }
+
+    pub fn pow(&self, n: usize) -> Poly {
+        self.powmod_opt(n, None)
+    }
+
+    pub fn pow_mod(&self, n: usize, modulus: &Poly) -> Poly {
+        self.powmod_opt(n, Some(modulus))
     }
 
     pub fn quot_rem(&self, d: &Poly) -> (Poly, Poly) {
@@ -360,6 +381,10 @@ impl Poly {
             return Poly::one()
         } else if self == rhs {
             return self.clone()
+        } else if self.is_zero() {
+            return rhs.clone()
+        } else if rhs.is_zero() {
+            return self.clone()
         }
 
         let (mut a, mut b) = if self.degree() >= rhs.degree() {
@@ -368,16 +393,12 @@ impl Poly {
             (rhs.clone(), self.clone())
         };
 
-        while !(b.is_zero() || b.is_one() || a.is_one()) {
+        while !b.is_zero() {
             a = a.rem(&b);
             std::mem::swap(&mut a, &mut b);
         }
 
-        if a.is_one() || b.is_one() {
-            Poly::one()
-        } else {
-            a
-        }
+        a
     }
 
     pub fn extended_gcd(&self, rhs: &Poly) -> (Poly, Poly, Poly) {
@@ -490,41 +511,50 @@ impl Poly {
         mat += Matrix::eye(mat.shape.0);
         let nsp = mat.null_space();
 
-        let mut factors = Vec::with_capacity(nsp.shape.1);
-        let mut q = self.clone();
+        let mut factors = vec![self.clone()];
         for i in 0..nsp.shape.1 {
             let g = Poly::new(nsp.col(i).iter());
-            if g.is_one() || q.is_one() { continue; }
+            if g.is_one() { continue; }
 
-            let h = q.gcd(&g);
-            if !h.is_one() { 
-                q = q.quot(&h);
-                factors.push(h);
-            } else {
-                let h = q.gcd(&(g - Poly::one()));
-                q = q.quot(&h);
-                factors.push(h);
-            }
+            for i in 0..factors.len() {
+                let q = &mut factors[i];
+                let mut h = q.gcd(&g);
+                if !h.is_one() && h.degree() < q.degree() { 
+                    *q = q.quot(&h);
+                    let h2 = h.gcd(&(&g - Poly::one()));
+                    if !h2.is_one() && h2.degree() < h.degree() {
+                        h = h.quot(&h2);
+                        factors.push(h);
+                        factors.push(h2);
+                    } else {
+                        factors.push(h);
+                    }
+                }
+                
+                let q = &mut factors[i];
+                let h = q.gcd(&(&g - Poly::one()));
+                if !h.is_one() && h.degree() < q.degree() {
+                    *q = q.quot(&h);
+                    factors.push(h);
+                }
+            }            
         }
-        if self.is_one() || !q.is_one() {
-            factors.push(q);
-        }
+
         factors.sort_by_key(Poly::degree);
         factors
     }
 
-    pub fn factor(&self) -> Vec<Poly> {
+    pub fn factor_with_multiplicities(&self) -> Vec<(Poly, usize)> {
         if self.is_one() || self.is_zero() {
-            return vec![self.clone()]
+            return vec![(self.clone(), 1)]
         }
 
         let sff = self.square_free();
-        let mut result = Vec::new();
+        let mut result = HashMap::new();
         for (mut term, reps) in sff {
             if term.terms().len() > 0 && term.terms()[0] > 0 {
-                for _ in 0..term.terms()[0] * reps {
-                    result.push(Poly::monom(1));
-                }
+                *result.entry(Poly::monom(1))
+                    .or_insert(0) += term.terms()[0] * reps;
                 term = term.quot(&Poly::monom(term.terms()[0]));
             }
 
@@ -533,13 +563,39 @@ impl Poly {
             }
 
             for factor in term.factor_square_free() {
-                for _ in 0..reps {
-                    result.push(factor.clone());
-                }
+                *result.entry(factor)
+                    .or_insert(0) += reps;
             }
         }
-        result.sort_by_key(Poly::degree);
+        let mut result = result.into_iter().collect::<Vec<_>>();
+        result.sort_by_key(|(p, _)| p.degree());
         result
+    }
+
+    pub fn factor(&self) -> Vec<Poly> {
+        let facts = self.factor_with_multiplicities();
+        let mut out = Vec::new();
+        for (fact, reps) in facts {
+            for _ in 0..reps {
+                out.push(fact.clone());
+            }
+        }
+        out
     }
 }
 
+#[test]
+fn factor_to_irreducibles() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let poly = Poly::random(&mut rng, 20);
+        let factors = poly.factor();
+        let mut rec = Poly::one();
+        for f in factors {
+            assert!(f.is_irreducible());
+            rec = rec * f;
+        }
+        assert_eq!(rec, poly);
+    }
+}

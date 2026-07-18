@@ -109,10 +109,10 @@ impl LinearSpace {
         }
     }
 
-    pub fn push(&mut self, v: &Matrix) {
+    pub fn push(&mut self, v: &Matrix) -> bool {
         let mut v = v.clone();
         self.reduce_using(&mut v);
-        if v.is_zeros() { return }
+        if v.is_zeros() { return false }
 
         v.row_reduce_ext(false, ());
         let (mut vpivots, vrank) = v.pivot_cols();
@@ -120,6 +120,7 @@ impl LinearSpace {
         self.basis = self.basis.vconcat(&v.slice(..vrank, ..));
         self.pivots.append(&mut vpivots);
         self.cycle_sort();
+        true
     }
 
     pub fn union(&self, other: &LinearSpace) -> LinearSpace {
