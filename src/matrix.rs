@@ -408,6 +408,26 @@ impl Matrix {
         });
         self.shape.1 -= 1;
     }
+
+    pub fn triu(&self) -> Matrix {
+        let mut out = self.clone();
+        for i in 0..self.num_rows() {
+            for j in 0..i.min(self.num_cols()) {
+                out[(i, j)] = GF2::ZERO;
+            }
+        }
+        out
+    }
+
+    pub fn tril(&self) -> Matrix {
+        let mut out = self.clone();
+        for i in 0..self.num_rows() {
+            for j in i+1..self.num_cols() {
+                out[(i, j)] = GF2::ZERO;
+            }
+        }
+        out
+    }
 }
 
 impl Index<(usize, usize)> for Matrix {

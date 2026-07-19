@@ -774,47 +774,72 @@ fn generalized_jordan_form_roundtrip() {
     }
 }
 
-// import numpy as np
-// from galois import GF2, FieldArray
+/// For any invertible A, find {u_i}, {v_i} such that A = (I + u_1v_1^T)..(I + u_kv_k^T),
+/// where k = rank(A + I) and each u_i^T v_i = 0. The matrices U and V have the u_i, v_i as 
+/// their columns, and B is computed so that A = I + UBV^T - you should think of B as the 
+/// transitive closure of the Gram matrix of U and V.
+pub struct TransvectionDecomposition {
+    pub u: Matrix,
+    pub v: Matrix,
+    pub b: Matrix
+}
 
-// def transvection_decomp(A: FieldArray) -> tuple[FieldArray, FieldArray]:
-// 		I = GF2.Identity(A.shape[0])    
-// 		if not np.any(A + I):
-// 				return GF2.Zeros((0,A.shape[0])), GF2.Zeros((0,A.shape[0]))
-			
-//     Ap = GF2.Identity(A.shape[0])
-//     Aw = A.copy()
-//     U = []
-//     V = []    
-//     while np.any(Aw + I):
-// 		    # Pick v != 0 with Nv = 0:
-// 		    N = (Aw + I).null_space()
-// 		    v = N.null_space()[0, :]
-		    
-// 		    # Pick x so that v^TAx = v^Tx = 1:
-// 		    vA = np.dot(Aw.T, v)
-// 		    if np.any(vA * v):
-// 				    i = np.argmax(vA * v)
-// 				    x = GF2.Zeros(A.shape[0])
-// 					  x[i] = 1
-// 			  else:
-// 					  i = np.argmax(vA * (vA + v))
-// 					  j = np.argmax(v * (vA + v))
-// 					  x = GF2.Zeros(A.shape[0])
-// 					  x[i] = 1
-// 					  x[j] = 1
-				
-// 				u = np.dot(Aw, x) + x
-				
-//         assert np.dot(vA, x) == 1
-//         assert np.dot(v, x) == 1
-//         assert not np.any(np.dot(N, v))
-//         assert np.linalg.det(I + np.outer(u, v)) != 0
+impl Matrix {
+    pub fn transvection_decomposition(&self) -> TransvectionDecomposition {
+        assert!(self.is_invertible(), "cannot find transvection decomposition of non-invertible matrix");
         
-//         Aw = (I + np.outer(u, v)) @ Aw
-//         Ap = Ap @ (I + np.outer(u, v))
-//         U.append(u)
-//         V.append(v)
-        
-//     assert not np.any(A + Ap)
-//     return np.stack(U, axis=0), np.stack(V, axis=0)
+        let n = self.num_rows();
+        if self.is_identity() {
+            return TransvectionDecomposition { 
+                u: Matrix::zeros(n, 0),
+                v: Matrix::zeros(n, 0),
+                b: Matrix::zeros(0, 0)
+            }
+        }
+
+        let mut a = self.clone();
+        let mut us = Vec::new();
+        let mut vs = Vec::new();
+        while !a.is_identity() {
+            let nsp = (Matrix::eye(n) + &a).null_space();
+            let v = nsp.transpose().null_space().col(0);
+            let va = v.transpose().dot(&a);
+            let x = if let Some(i) = v.iter().zip(va.iter()).position(|(a, b)| a * b != GF2::ZERO) {
+                Matrix::col_vector(i, n)
+            } else {
+                let i = v.iter().zip(va.iter()).position(|(a, b)| a * b + b != GF2::ZERO).unwrap();
+                let j = v.iter().zip(va.iter()).position(|(a, b)| a * b + a != GF2::ZERO).unwrap();
+                Matrix::col_vector(i, n) + Matrix::col_vector(j, n)
+            };
+            let u = a.dot(&x) + x;
+            a += u.dot(&va);
+            us.push(u);
+            vs.push(v);
+        }
+
+        let u = Matrix::hstack(&us);
+        let v = Matrix::hstack(&vs);
+
+        let gram = v.transpose().dot(&u);
+        let b = (gram.triu() + Matrix::eye(gram.num_rows())).inverse().unwrap();
+
+        TransvectionDecomposition { u, v, b }
+    }
+}
+
+#[test]
+fn transvection_decomp_round_trip() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random_invertible(&mut rng, 10);
+        let td = mat.transvection_decomposition();
+        assert_eq!(td.u.num_cols(), (&mat + Matrix::eye(10)).rank());
+        assert_eq!(mat, td.u.dot(&td.b).dot(&td.v.transpose()) + Matrix::eye(10));
+        let mut rec = Matrix::eye(10);
+        for i in 0..td.u.num_cols() {
+            rec += rec.dot(&td.u.col(i)).dot(&td.v.col(i).transpose());
+        }
+        assert_eq!(rec, mat);
+    }
+}
