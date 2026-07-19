@@ -57,7 +57,7 @@ impl LinearSpace {
         self.basis.num_cols()
     }
 
-    fn reduce_using(&self, target: &mut Matrix) {
+    pub fn reduce(&self, target: &mut Matrix) {
         assert_eq!(target.num_cols(), self.basis.num_cols());
         for r in 0..target.num_rows() {
             for (idx, &c) in self.pivots.iter().enumerate() {
@@ -71,7 +71,7 @@ impl LinearSpace {
 
     pub fn contains(&self, v: &Matrix) -> bool {
         let mut v = v.clone();
-        self.reduce_using(&mut v);
+        self.reduce(&mut v);
         v.is_zeros()
     }
 
@@ -111,7 +111,7 @@ impl LinearSpace {
 
     pub fn push(&mut self, v: &Matrix) -> bool {
         let mut v = v.clone();
-        self.reduce_using(&mut v);
+        self.reduce(&mut v);
         if v.is_zeros() { return false }
 
         v.row_reduce_ext(false, ());

@@ -1,3 +1,5 @@
+use crate::LinearSpace;
+
 use super::*;
 
 /// Decompose A = P.T @ L @ U
@@ -357,37 +359,54 @@ pub struct KrylovSubspace {
 }
 
 impl Matrix {
-    fn krylov_subspace_ext(&self, vec: &Matrix, rec: impl GaussRecorder) -> Matrix {
+    fn krylov_subspace_ext(&self, vec: &Matrix) -> (Matrix, Poly, usize, LinearSpace)  {
         assert_eq!(self.shape.0, self.shape.1, "cannot find krylov subspace of non-square matrix");
         assert!(vec.shape.0 == self.shape.0 && vec.shape.1 == 1, "input to krylov subspace must be a compatible column vector");
-        let n = self.shape.0;
-    
-        let mut vecs = vec![vec.clone()];
-        for i in 0..n {
-            vecs.push(self.dot(&vecs[i]));
+
+        if vec.is_zeros() {
+            return (Matrix::zeros(0, vec.num_rows()), Poly::one(), 0, LinearSpace::empty(vec.num_rows()))
         }
-        let mut augmented = Matrix::hstack(&vecs);
-        augmented.row_reduce_ext(true, rec);
-        augmented
+
+        let mut lsp = LinearSpace::new(vec.transpose());
+        let mut vecs = vec![vec.clone()];
+        let nv = loop {
+            let nv = self.dot(&vecs[vecs.len() - 1]);
+            if !lsp.push(&nv.transpose()) { break nv }
+            vecs.push(nv);
+        };
+        let rank = vecs.len();
+
+        for vec in &mut vecs { *vec = vec.clone().reshape(1, vec.shape.0); }
+        let vecs =  Matrix::vstack(&vecs);
+        let mut coeffs = Matrix::eye(vecs.num_rows())
+            .vconcat(&Matrix::zeros(1, vecs.num_rows()));
+        let mut ext = vecs.vconcat(&nv.reshape(1, vec.num_rows()));
+        ext.row_reduce_ext(false, &mut coeffs);
+        let min_poly = Poly::new(coeffs.row(coeffs.num_rows() - 1).iter().chain([GF2::ONE]));
+
+        (vecs, min_poly, rank, lsp)
     }
 
     pub fn minimal_polynomial_of(&self, vec: &Matrix) -> Poly {
-        let n = self.shape.0;
-        let augmented = self.krylov_subspace_ext(vec, ());
-        let rank = (0..n).find(|&i| augmented[(i, i)] == GF2::ZERO).unwrap_or(n);
-        Poly::new((0..rank).map(|i| augmented[(i, rank)]).chain([GF2::ONE]))
+        self.krylov_subspace_ext(vec).1
     }
 
     pub fn krylov_subspace(&self, vec: &Matrix) -> KrylovSubspace {
-        let n = self.shape.0;
-        let mut ibch = Matrix::eye(n);
-        let augmented = self.krylov_subspace_ext(vec, &mut ibch);
-        let rank = (0..n).find(|&i| augmented[(i, i)] == GF2::ZERO).unwrap_or(n);
-        let min_poly = Poly::new((0..rank).map(|i| augmented[(i, rank)]).chain([GF2::ONE]));
-
-        let bch = ibch.inverse().unwrap();
+        let (vecs, min_poly, rank, lsp) = self.krylov_subspace_ext(vec);
+        let bch = vecs.vconcat(&lsp.complement().basis()).transpose();
+        let ibch = bch.inverse().unwrap();
         let action = ibch.dot(self).dot(&bch);
         KrylovSubspace { action, basis: bch, dual_basis: ibch, rank, min_poly }
+    }
+
+    fn krylov_block_reduce(&self, vec: &Matrix) -> (Poly, Matrix) {
+        let (_, min_poly, _, lsp) = self.krylov_subspace_ext(vec);
+        let (mut pivots, rank) = lsp.basis().pivot_cols();
+        pivots[rank..].reverse();
+        let mut rest = self.slice(.., &pivots[rank..]).transpose();
+        lsp.reduce(&mut rest);
+        let reduced = rest.slice(.., &pivots[rank..]).transpose();
+        (min_poly, reduced)
     }
 }
 
@@ -413,6 +432,20 @@ fn krylov_min_poly_div_total() {
         let vec = Matrix::random(&mut rng, 10, 1);
         let minpoly_vec = mat.minimal_polynomial_of(&vec);
         assert!(minpoly.rem(&minpoly_vec).is_zero());
+    }
+}
+
+#[test]
+fn krylov_block_reduce_match() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random(&mut rng, 10, 10);
+        let vec = Matrix::random(&mut rng, 10, 1);
+        let ksp = mat.krylov_subspace(&vec);
+        let (min_poly, reduced) = mat.krylov_block_reduce(&vec);
+        assert_eq!(ksp.min_poly, min_poly);
+        assert_eq!(ksp.action.slice(ksp.rank.., ksp.rank..), reduced);
     }
 }
 
@@ -522,7 +555,7 @@ impl Matrix {
         while total_k < n {
             if t.is_identity() {
                 for i in total_k+1..n+1 {
-                    invariant_factors.push(Poly::one());
+                    invariant_factors.push(Poly::from_terms([0, 1]));
                     indices.push(i);
                 }
                 break;
@@ -549,9 +582,25 @@ impl Matrix {
     }
 
     pub fn characteristic_polynomial(&self) -> Poly {
-        self.rational_canonical_form()
-            .invariant_factors
-            .into_iter()
+        assert!(self.is_square(), "cannot calculate characteristic polynomial of non-square matrix");
+
+        if self.num_rows() == 0 {
+            return Poly::one()
+        } else if self.is_zeros() {
+            return Poly::monom(self.num_rows())
+        } else if self.is_identity() {
+            return Poly::from_terms([0, 1]).pow(self.num_rows())
+        }
+
+        let vec = Matrix::col_vector(0, self.num_rows());
+        let (poly, reduced) = self.krylov_block_reduce(&vec);
+        return poly * reduced.characteristic_polynomial()
+    }
+}
+
+impl RationalCanonicalForm {
+    pub fn characteristic_polynomial(&self) -> Poly {
+        self.invariant_factors.iter()
             .fold(Poly::one(), |a, b| a * b)
     }
 }
@@ -588,6 +637,32 @@ fn rational_canonical_form_roundtrip() {
         let rcf = mat.rational_canonical_form();
         assert_eq!(rcf.basis.dot(&rcf.normal_form).dot(&rcf.dual_basis), mat);
         assert_eq!(rcf.indices.len(), rcf.invariant_factors.len() + 1);
+    }
+}
+
+#[test]
+fn char_poly_vanish() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random(&mut rng, 10, 10);
+        let char_poly = mat.characteristic_polynomial();
+        assert!(mat.eval_poly(&char_poly, &Matrix::eye(10)).is_zeros());
+    }
+}
+
+#[test]
+fn char_poly_match_rcf() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random(&mut rng, 10, 10);
+        let char_poly = mat.characteristic_polynomial();
+        let rcf = mat.rational_canonical_form();
+        let rcf_char_poly = rcf.characteristic_polynomial();
+        assert_eq!(rcf_char_poly.degree(), mat.num_rows());
+        assert_eq!(char_poly.degree(), mat.num_rows());
+        assert_eq!(rcf_char_poly, char_poly);
     }
 }
 
@@ -698,3 +773,48 @@ fn generalized_jordan_form_roundtrip() {
         assert_eq!(&gjf.normal_form * &mask, gjf.normal_form);
     }
 }
+
+// import numpy as np
+// from galois import GF2, FieldArray
+
+// def transvection_decomp(A: FieldArray) -> tuple[FieldArray, FieldArray]:
+// 		I = GF2.Identity(A.shape[0])    
+// 		if not np.any(A + I):
+// 				return GF2.Zeros((0,A.shape[0])), GF2.Zeros((0,A.shape[0]))
+			
+//     Ap = GF2.Identity(A.shape[0])
+//     Aw = A.copy()
+//     U = []
+//     V = []    
+//     while np.any(Aw + I):
+// 		    # Pick v != 0 with Nv = 0:
+// 		    N = (Aw + I).null_space()
+// 		    v = N.null_space()[0, :]
+		    
+// 		    # Pick x so that v^TAx = v^Tx = 1:
+// 		    vA = np.dot(Aw.T, v)
+// 		    if np.any(vA * v):
+// 				    i = np.argmax(vA * v)
+// 				    x = GF2.Zeros(A.shape[0])
+// 					  x[i] = 1
+// 			  else:
+// 					  i = np.argmax(vA * (vA + v))
+// 					  j = np.argmax(v * (vA + v))
+// 					  x = GF2.Zeros(A.shape[0])
+// 					  x[i] = 1
+// 					  x[j] = 1
+				
+// 				u = np.dot(Aw, x) + x
+				
+//         assert np.dot(vA, x) == 1
+//         assert np.dot(v, x) == 1
+//         assert not np.any(np.dot(N, v))
+//         assert np.linalg.det(I + np.outer(u, v)) != 0
+        
+//         Aw = (I + np.outer(u, v)) @ Aw
+//         Ap = Ap @ (I + np.outer(u, v))
+//         U.append(u)
+//         V.append(v)
+        
+//     assert not np.any(A + Ap)
+//     return np.stack(U, axis=0), np.stack(V, axis=0)

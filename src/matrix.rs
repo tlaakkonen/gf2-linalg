@@ -324,12 +324,17 @@ impl Matrix {
         }
     }
 
-    pub fn reshape(self, rows: usize, cols: usize) -> Matrix {
+    pub fn reshape(mut self, rows: usize, cols: usize) -> Matrix {
+        self.reshape_in_place(rows, cols);
+        self
+    }
+
+    pub fn reshape_in_place(&mut self, rows: usize, cols: usize) {
         assert_eq!(
             self.shape.0 * self.shape.1, rows * cols, 
             "shape {:?} cannot be reshaped to {:?}", self.shape, (rows, cols)
         );
-        Matrix { data: self.data, shape: (rows, cols) }
+        self.shape = (rows, cols)
     }
 
     pub fn ravel(self) -> Matrix {
