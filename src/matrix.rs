@@ -111,6 +111,10 @@ impl Matrix {
         self.shape.0 == self.shape.1
     }
 
+    pub fn is_symmetric(&self) -> bool {
+        self.is_square() && (0..self.num_rows()).all(|i| (0..self.num_rows()).all(|j| self[(i, j)] == self[(j, i)]))
+    }
+
     pub fn hamming_weight(&self) -> usize {
         self.data.iter().copied().map(bool::from).map(usize::from).sum::<usize>()
     }
@@ -165,6 +169,29 @@ impl Debug for Matrix {
 impl Display for Matrix {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
+    }
+}
+
+impl Matrix {
+    pub fn to_latex(&self) -> String {
+        use std::fmt::Write;
+        let mut f = String::new();
+        write!(f, "\\begin{{pmatrix}}\n  ").unwrap();
+        for row in 0..self.shape.0 {
+            for col in 0..self.shape.1 {
+                if col < self.shape.1 - 1 {
+                    write!(f, "{} & ", self[(row, col)]).unwrap();
+                } else {
+                    write!(f, "{} \\\\", self[(row, col)]).unwrap();
+                }
+            }
+
+            if row < self.shape.0 - 1 {
+                write!(f, "\n  ").unwrap();
+            }
+        }
+        write!(f, "\n\\end{{pmatrix}}").unwrap();
+        f
     }
 }
 
@@ -425,6 +452,23 @@ impl Matrix {
             for j in i+1..self.num_cols() {
                 out[(i, j)] = GF2::ZERO;
             }
+        }
+        out
+    }
+
+    pub fn diag(&self) -> Matrix {
+        let mut out = Matrix::zeros(1, self.num_rows().min(self.num_rows()));
+        for i in 0..self.num_rows().min(self.num_rows()) {
+            out[(0, i)] = self[(i, i)];
+        }
+        out
+    }
+
+    pub fn from_diag(diag: &Matrix) -> Matrix {
+        assert_eq!(diag.num_rows(), 1, "input to from_diag must be a row vector");
+        let mut out = Matrix::zeros(diag.num_cols(), diag.num_cols());
+        for i in 0..diag.num_cols() {
+            out[(i, i)] = diag[(0, i)];
         }
         out
     }

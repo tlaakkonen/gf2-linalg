@@ -150,11 +150,21 @@ fn frsd_roundtrip() {
 /// Each block is either [1], [[0,1],[1,0]] or [0], organized in this order.
 /// num_i and num_h, respectively, indicate that the first num_i and next num_h 
 /// blocks are [1] or [[0,1],[1,0]], respectively.
+#[derive(Debug, Clone)]
 pub struct WittDecomposition {
     pub r: Matrix,
     pub m: Matrix,
     pub num_i: usize,
     pub num_h: usize
+}
+
+impl WittDecomposition {
+    /// Determine in which congruence class the input matrix lies.
+    /// This will compare equal if and only if two matrices are congruent.
+    /// (note that this only makes sense when the dimension of the matrices is equal)
+    pub fn congruence_class(&self) -> (usize, bool) {
+        (2*self.num_h + self.num_i, self.num_i == 0)
+    }
 }
 
 impl Matrix {
@@ -245,6 +255,7 @@ fn witt_decomposition_roundtrip() {
 
 /// For symmetric A, decompose A = MM^T
 /// M is either n x rank(A) or n x (rank(A) + 1) if A is alternating
+#[derive(Debug, Clone)]
 pub struct SymmetricRankDecomposition {
     pub m: Matrix 
 }
@@ -298,6 +309,290 @@ fn symmetric_rank_decomposition_roundtrip() {
         }
         let srd = mat.symmetric_rank_decomposition();
         assert_eq!(mat, srd.m.dot(&srd.m.transpose()));
+    }
+}
+
+/// Check if two symmetric matrices A and B are congruent, and return an invertible P such that PAP^T = B.
+pub fn check_congruence_symmetric(a: &Matrix, b: &Matrix) -> Option<Matrix> {
+    assert_eq!(a.shape, b.shape, "only equal-sized matrices can be compared for congruence");
+
+    let mut wa = a.witt_decomposition();
+    let mut wb = b.witt_decomposition();
+
+    if wa.congruence_class() != wb.congruence_class() {
+        None
+    } else {
+        // TODO: this duplicates logic from symmetric_rank_decomposition, refactor
+        let m = if wa.num_i < wb.num_i { &mut wa.m } else { &mut wb.m }; 
+        for i in (wb.num_i.min(wa.num_i)..wb.num_i.max(wa.num_i)).step_by(2) {
+            m.col_add(i, i - 1);
+            m.col_add(i - 1, i);
+            m.col_add(i + 1, i);
+            m.col_add(i - 1, i + 1);            
+        }
+        Some(wb.m.dot(&wa.m.inverse().unwrap()))
+    }
+}
+
+#[test]
+fn check_congruence_congruent() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([43; 32]);
+    for _ in 0..1000 {
+        let mut a = Matrix::random(&mut rng, 10, 10);
+        for i in 0..a.num_rows() {
+            for j in i+1..a.num_rows() {
+                a[(j, i)] = a[(i, j)]
+            }
+        }
+
+        let mut b = Matrix::random(&mut rng, 10, 10);
+        for i in 0..b.num_rows() {
+            for j in i+1..b.num_rows() {
+                b[(j, i)] = b[(i, j)]
+            }
+        }
+
+        if let Some(p) = check_congruence_symmetric(&a, &b) {
+            assert_eq!(p.dot(&a).dot(&p.transpose()), b);
+        } else {
+            assert!(a.rank() != b.rank() || (0..10).all(|i| a[(i, i)] == GF2::ZERO) != (0..10).all(|i| b[(i, i)] == GF2::ZERO));
+        }
+    }
+}
+
+/// Any square matrix A can be interpreted as a quadratic form q_A(x) = x^T A x. 
+/// Equivalence transformations of quadratic forms look like A = PCP^T + K, where P
+/// is invertible and K is alternating, so that q_A(x) = q_C(P^Tx). This structure stores
+/// such an equivalence where C is in a canonical form which is entirely specified by 
+/// three invariants: the Arf invariant, whether the radical is non-zero, and the dimension
+/// of the non-degenerate part of q_A.
+#[derive(Debug, Clone)]
+pub struct CanonicalQuadraticForm {
+    pub p: Matrix,
+    pub k: Matrix,
+    pub c: Matrix,
+    pub arf: bool,
+    pub rad: bool,
+    pub dim: usize
+}
+
+impl CanonicalQuadraticForm {
+    /// A value representing the equivalence class in which the input matrix lies.
+    /// This will compare equal if and only if two quadratic forms are equivalent.
+    /// (note this only makes sense for forms with the same ambient dimension)
+    pub fn equivalence_class(&self) -> (bool, bool, usize) {
+        (self.arf, self.rad, self.dim)
+    }
+
+    fn cong_row_add(&mut self, i: usize, j: usize) {
+        self.c.row_add(i, j);
+        self.c.col_add(i, j);
+        self.p.col_add(j, i);
+    }
+
+    fn cong_row_swap(&mut self, i: usize, j: usize) {
+        self.c.row_swap(i, j);
+        self.c.col_swap(i, j);
+        self.p.col_swap(j, i);
+    }
+
+    fn equiv_add(&mut self, a: &Matrix) {
+        self.c += a;
+        self.k += self.p.dot(&self.p.dot(a).transpose()).transpose();
+    }
+
+    fn equiv_pair_add(&mut self, i: usize, j: usize) {
+        self.c[(i, j)] += GF2::ONE;
+        self.c[(j, i)] += GF2::ONE;
+        for x in 0..self.p.num_rows() {
+            for y in 0..self.p.num_cols() {
+                self.k[(x, y)] += self.p[(x, i)] * self.p[(y, j)] + self.p[(x, j)] * self.p[(y, i)];
+            }
+        }
+    }
+}
+
+impl Matrix {
+    /// Solve the quadratic equation x^T A x = y for x != 0
+    pub fn solve_quadratic(&self, y: GF2) -> Option<Matrix> {
+        assert!(self.is_square(), "cannot interpret non-square matrix as quadratic form");
+        if y == GF2::ONE {
+            if let Some(i) = (0..self.num_rows()).find(|&i| self[(i, i)] == GF2::ONE) {
+                Some(Matrix::col_vector(i, self.num_rows()))
+            } else if let Some((i, j)) = (0..self.num_rows()).flat_map(|i| {
+                let j = (0..self.num_rows()).find(|&j| self[(i, j)] != self[(j, i)])?;
+                Some((i, j))
+            }).next() {
+                Some(Matrix::col_vector(i, self.num_rows()) + Matrix::col_vector(j, self.num_rows()))
+            } else {
+                None
+            }
+        } else {
+            if let Some(i) = (0..self.num_rows()).find(|&i| self[(i, i)] == GF2::ZERO) {
+                Some(Matrix::col_vector(i, self.num_rows()))
+            } else if let Some((i, j)) = (0..self.num_rows()).flat_map(|i| {
+                let j = (0..self.num_rows()).find(|&j| i != j && self[(i, j)] == self[(j, i)])?;
+                Some((i, j))
+            }).next() {
+                Some(Matrix::col_vector(i, self.num_rows()) + Matrix::col_vector(j, self.num_rows()))
+            } else if self.num_rows() >= 3 {
+                Some(
+                    Matrix::col_vector(0, self.num_rows())
+                    + Matrix::col_vector(1, self.num_rows())
+                    + Matrix::col_vector(2, self.num_rows())
+                )
+            } else {
+                None
+            }
+        }
+    }
+
+    pub fn canonical_quadratic_form(&self) -> CanonicalQuadraticForm {
+        assert!(self.is_square(), "cannot interpret non-square matrix as quadratic form");
+
+        let n = self.num_rows();
+        let mut f = CanonicalQuadraticForm {
+            p: Matrix::eye(self.num_rows()),
+            k: Matrix::zeros_like(&self),
+            c: self.clone(),
+            arf: false, rad: false, dim: 0
+        };
+
+        for idx in (0..n).step_by(2) {
+            let Some((pi, pj)) = (idx..n)
+                .map(|j| (j+1..n).map(move |i| (i, j)))
+                .flatten()
+                .find(|&(i, j)| f.c[(i, j)] != f.c[(j, i)]) else { break };
+
+            f.cong_row_swap(pj, idx);
+            f.cong_row_swap(pi, idx+1);
+
+            for i in idx+2..n {
+                if f.c[(idx, i)] != f.c[(i, idx)] {
+                    f.cong_row_add(idx+1, i);
+                }
+            }
+
+            f.cong_row_swap(idx, idx + 1);
+
+            for i in idx+2..n {
+                if f.c[(idx, i)] != f.c[(i, idx)] {
+                    f.cong_row_add(idx+1, i);
+                }
+            }
+        }
+
+        let mut a = Matrix::zeros_like(&f.c);
+        for i in 0..n {
+            for j in 0..i.saturating_sub(1) {
+                a[(i, j)] = f.c[(i, j)];
+                a[(j, i)] = f.c[(i, j)];
+            }
+            if i > 0 && !((f.c[(i, i - 1)] == GF2::ONE) ^ (f.c[(i, i - 1)] == f.c[(i - 1, i)])) {
+                a[(i, i - 1)] = GF2::ONE;
+                a[(i - 1, i)] = GF2::ONE;
+            }
+        }
+        f.equiv_add(&a);
+
+        for i in (0..n-1).step_by(2) {
+            match (f.c[(i, i)], f.c[(i+1,i+1)], f.c[(i+1,i)]) {
+                (_, _, GF2::ZERO) => break,
+                (GF2::ZERO, GF2::ZERO, GF2::ONE) => (),
+                (GF2::ONE, GF2::ZERO, GF2::ONE) => f.cong_row_add(i + 1, i),
+                (GF2::ZERO, GF2::ONE, GF2::ONE) => f.cong_row_add(i, i + 1),
+                (GF2::ONE, GF2::ONE, GF2::ONE) => {
+                    if let Some(j) = (i+2..n-1).step_by(2).find(|&j| {
+                        (f.c[(j, j)], f.c[(j+1,j+1)], f.c[(j+1,j)]) == (GF2::ONE, GF2::ONE, GF2::ONE)
+                    }) {
+                        f.cong_row_add(j, j + 1);
+                        f.cong_row_add(j, i + 1);
+                        f.cong_row_add(j, i);
+                        f.cong_row_add(j + 1, j);
+                        f.cong_row_add(i + 1, j + 1);
+                        f.cong_row_add(i, j + 1);
+                        f.cong_row_add(i, j);
+                        f.cong_row_add(j + 1, i);
+                        f.equiv_pair_add(i, j);
+                        f.equiv_pair_add(i + 1, j + 1);
+                    } else {
+                        f.arf = true;
+                        if i > 0 {
+                            f.cong_row_swap(0, i);
+                            f.cong_row_swap(1, i + 1);
+                        }
+                    }
+                }
+            }
+            f.dim += 2;
+        }
+
+        if let Some(pivot) = (f.dim..n).find(|&i| f.c[(i, i)] == GF2::ONE) {
+            if pivot != f.dim {
+                f.cong_row_swap(pivot, f.dim);
+            }
+
+            for i in f.dim+1..n {
+                if f.c[(i, i)] !=  GF2::ONE { continue }
+                f.equiv_pair_add(f.dim, i);
+                f.cong_row_add(f.dim, i);
+            }
+
+            f.rad = true;
+        }
+
+        f
+    }
+}
+
+#[test]
+fn quad_form_canonicalize_roundtrip() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    
+    for _ in 0..1000 {
+        let mat = Matrix::random(&mut rng, 10, 10);
+        let f = mat.canonical_quadratic_form();
+        assert_eq!(mat, f.p.dot(&f.c).dot(&f.p.transpose()) + &f.k);
+        assert!(f.k.diag().is_zeros() && f.k.is_symmetric() && f.p.is_invertible());
+    }
+
+    for _ in 0..1000 {
+        let mat = Matrix::random(&mut rng, 11, 11);
+        let f = mat.canonical_quadratic_form();
+        assert_eq!(mat, f.p.dot(&f.c).dot(&f.p.transpose()) + &f.k);
+        assert!(f.k.diag().is_zeros() && f.k.is_symmetric() && f.p.is_invertible());
+    }
+}
+
+#[test]
+fn quad_form_equivalence_invariants() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+
+    for _ in 0..1000 {
+        let a = Matrix::random(&mut rng, 10, 10);
+        let b = Matrix::random(&mut rng, 10, 10);
+        let fa = a.canonical_quadratic_form();
+        let fb = b.canonical_quadratic_form();
+        if fa.c == fb.c {
+            assert_eq!(fa.equivalence_class(), fb.equivalence_class());
+        } else if fa.equivalence_class() == fb.equivalence_class() {
+            assert_eq!(fa.c, fb.c);
+        }
+    }
+
+    for _ in 0..1000 {
+        let a = Matrix::random(&mut rng, 11, 11);
+        let b = Matrix::random(&mut rng, 11, 11);
+        let fa = a.canonical_quadratic_form();
+        let fb = b.canonical_quadratic_form();
+        if fa.c == fb.c {
+            assert_eq!(fa.equivalence_class(), fb.equivalence_class());
+        } else if fa.equivalence_class() == fb.equivalence_class() {
+            assert_eq!(fa.c, fb.c);
+        }
     }
 }
 
@@ -398,16 +693,6 @@ impl Matrix {
         let action = ibch.dot(self).dot(&bch);
         KrylovSubspace { action, basis: bch, dual_basis: ibch, rank, min_poly }
     }
-
-    fn krylov_block_reduce(&self, vec: &Matrix) -> (Poly, Matrix) {
-        let (_, min_poly, _, lsp) = self.krylov_subspace_ext(vec);
-        let (mut pivots, rank) = lsp.basis().pivot_cols();
-        pivots[rank..].reverse();
-        let mut rest = self.slice(.., &pivots[rank..]).transpose();
-        lsp.reduce(&mut rest);
-        let reduced = rest.slice(.., &pivots[rank..]).transpose();
-        (min_poly, reduced)
-    }
 }
 
 #[test]
@@ -432,20 +717,6 @@ fn krylov_min_poly_div_total() {
         let vec = Matrix::random(&mut rng, 10, 1);
         let minpoly_vec = mat.minimal_polynomial_of(&vec);
         assert!(minpoly.rem(&minpoly_vec).is_zero());
-    }
-}
-
-#[test]
-fn krylov_block_reduce_match() {
-    use rand::SeedableRng;
-    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
-    for _ in 0..1000 {
-        let mat = Matrix::random(&mut rng, 10, 10);
-        let vec = Matrix::random(&mut rng, 10, 1);
-        let ksp = mat.krylov_subspace(&vec);
-        let (min_poly, reduced) = mat.krylov_block_reduce(&vec);
-        assert_eq!(ksp.min_poly, min_poly);
-        assert_eq!(ksp.action.slice(ksp.rank.., ksp.rank..), reduced);
     }
 }
 
@@ -580,29 +851,6 @@ impl Matrix {
      
         RationalCanonicalForm { normal_form, basis: bch, dual_basis: ibch, indices, invariant_factors }
     }
-
-    pub fn characteristic_polynomial(&self) -> Poly {
-        assert!(self.is_square(), "cannot calculate characteristic polynomial of non-square matrix");
-
-        if self.num_rows() == 0 {
-            return Poly::one()
-        } else if self.is_zeros() {
-            return Poly::monom(self.num_rows())
-        } else if self.is_identity() {
-            return Poly::from_terms([0, 1]).pow(self.num_rows())
-        }
-
-        let vec = Matrix::col_vector(0, self.num_rows());
-        let (poly, reduced) = self.krylov_block_reduce(&vec);
-        return poly * reduced.characteristic_polynomial()
-    }
-}
-
-impl RationalCanonicalForm {
-    pub fn characteristic_polynomial(&self) -> Poly {
-        self.invariant_factors.iter()
-            .fold(Poly::one(), |a, b| a * b)
-    }
 }
 
 #[test]
@@ -637,6 +885,55 @@ fn rational_canonical_form_roundtrip() {
         let rcf = mat.rational_canonical_form();
         assert_eq!(rcf.basis.dot(&rcf.normal_form).dot(&rcf.dual_basis), mat);
         assert_eq!(rcf.indices.len(), rcf.invariant_factors.len() + 1);
+    }
+}
+
+impl RationalCanonicalForm {
+    pub fn characteristic_polynomial(&self) -> Poly {
+        self.invariant_factors.iter()
+            .fold(Poly::one(), |a, b| a * b)
+    }
+}
+
+impl Matrix {
+    fn krylov_block_reduce(&self, vec: &Matrix) -> (Poly, Matrix) {
+        let (_, min_poly, _, lsp) = self.krylov_subspace_ext(vec);
+        let (mut pivots, rank) = lsp.basis().pivot_cols();
+        pivots[rank..].reverse();
+        let mut rest = self.slice(.., &pivots[rank..]).transpose();
+        lsp.reduce(&mut rest);
+        let reduced = rest.slice(.., &pivots[rank..]).transpose();
+        (min_poly, reduced)
+    }
+
+    pub fn characteristic_polynomial(&self) -> Poly {
+        assert!(self.is_square(), "cannot calculate characteristic polynomial of non-square matrix");
+
+        if self.num_rows() == 0 {
+            return Poly::one()
+        } else if self.is_zeros() {
+            return Poly::monom(self.num_rows())
+        } else if self.is_identity() {
+            return Poly::from_terms([0, 1]).pow(self.num_rows())
+        }
+
+        let vec = Matrix::col_vector(0, self.num_rows());
+        let (poly, reduced) = self.krylov_block_reduce(&vec);
+        return poly * reduced.characteristic_polynomial()
+    }
+}
+
+#[test]
+fn krylov_block_reduce_match() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random(&mut rng, 10, 10);
+        let vec = Matrix::random(&mut rng, 10, 1);
+        let ksp = mat.krylov_subspace(&vec);
+        let (min_poly, reduced) = mat.krylov_block_reduce(&vec);
+        assert_eq!(ksp.min_poly, min_poly);
+        assert_eq!(ksp.action.slice(ksp.rank.., ksp.rank..), reduced);
     }
 }
 
@@ -778,6 +1075,7 @@ fn generalized_jordan_form_roundtrip() {
 /// where k = rank(A + I) and each u_i^T v_i = 0. The matrices U and V have the u_i, v_i as 
 /// their columns, and B is computed so that A = I + UBV^T - you should think of B as the 
 /// transitive closure of the Gram matrix of U and V.
+#[derive(Debug, Clone)]
 pub struct TransvectionDecomposition {
     pub u: Matrix,
     pub v: Matrix,
