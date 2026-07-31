@@ -73,6 +73,14 @@ pub struct RankDecomposition {
     pub f: Matrix
 }
 
+impl RankDecomposition {
+    pub fn generalized_inverse(&self) -> Matrix {
+        let fr = self.f.right_inverse().unwrap();
+        let cl = self.c.left_inverse().unwrap();
+        fr.dot(&cl)
+    }
+}
+
 impl Matrix {
     pub fn rank_decomposition(&self) -> RankDecomposition {
         let mut rref = self.clone();
@@ -89,6 +97,10 @@ impl Matrix {
 
         RankDecomposition { c, f }
     }
+
+    pub fn generalized_inverse(&self) -> Matrix {
+        self.rank_decomposition().generalized_inverse()
+    }
 }
 
 #[test]
@@ -99,6 +111,25 @@ fn rank_decomp_roundtrip() {
         let mat = Matrix::random(&mut rng, 10, 10);
         let rd = mat.rank_decomposition();
         assert_eq!(rd.c.dot(&rd.f), mat);
+    }
+}
+
+#[test]
+fn generalized_inverse_props() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random(&mut rng, 10, 10);
+        let ginv = mat.generalized_inverse();
+        assert_eq!(mat.dot(&ginv).dot(&mat), mat);
+
+        let mat = Matrix::random(&mut rng, 10, 8);
+        let ginv = mat.generalized_inverse();
+        assert_eq!(mat.dot(&ginv).dot(&mat), mat);
+
+        let mat = Matrix::random(&mut rng, 8, 10);
+        let ginv = mat.generalized_inverse();
+        assert_eq!(mat.dot(&ginv).dot(&mat), mat);
     }
 }
 
@@ -605,6 +636,14 @@ pub struct FittingDecomposition {
     pub dual_basis: Matrix
 }
 
+impl FittingDecomposition {
+    pub fn drazin_inverse(&self) -> Matrix {
+        self.basis.slice(.., ..self.invertible_part.num_rows())
+            .dot(&self.invertible_part.inverse().unwrap())
+            .dot(&self.dual_basis.slice(..self.invertible_part.num_rows(), ..))
+    }
+}
+
 impl Matrix {
     pub fn fitting_decomposition(&self) -> FittingDecomposition {
         let mut q = self.clone();
@@ -630,6 +669,10 @@ impl Matrix {
 
         FittingDecomposition { invertible_part, nilpotent_part, basis, dual_basis }
     }
+
+    pub fn drazin_inverse(&self) -> Matrix {
+        self.fitting_decomposition().drazin_inverse()
+    }
 }
 
 #[test]
@@ -641,6 +684,21 @@ fn fitting_decomposition_roundtrip() {
         let fd = mat.fitting_decomposition();
         assert_eq!(fd.basis.dot(&Matrix::block_diagonal(&[&fd.invertible_part, &fd.nilpotent_part])).dot(&fd.dual_basis), mat);
         assert_eq!(fd.invertible_part.determinant(), GF2::ONE);
+    }
+}
+
+#[test]
+fn drazin_inverse_props() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random(&mut rng, 10, 10);
+        let dmat = mat.drazin_inverse();
+        assert_eq!(dmat.dot(&mat).dot(&dmat), dmat);
+        assert_eq!(dmat.dot(&mat), mat.dot(&dmat));
+        if let Some(inv) = mat.inverse() {
+            assert_eq!(dmat, inv);
+        }
     }
 }
 

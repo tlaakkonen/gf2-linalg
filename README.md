@@ -43,12 +43,15 @@ Currently supported:
 * (P)L(D)U decompositions and linear solvers
 * Rank calculation and decomposition
 * Fitting decomposition
+* Generalized inverses (one-sided, g-inverse, Drazin)
 * The Frobenius / rational normal form
 * The generalized Jordan normal form
 * Characteristic and minimal polynomials, maximal vectors
 * Krylov subspaces
 * Witt decomposition of symmetric matrices
 * Lempel's symmetric factorization
+* Transvection decomposition of invertible matrices
+* Equivalence testing of quadratic forms
 
 Planned:
 * Markov-Patel-Hayes' algorithm

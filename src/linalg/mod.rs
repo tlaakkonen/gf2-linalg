@@ -355,6 +355,14 @@ impl Matrix {
         }
     }
 
+    pub fn right_inverse(&self) -> Option<Matrix> {
+        self.solve(&Matrix::eye(self.num_rows()))
+    }
+
+    pub fn left_inverse(&self) -> Option<Matrix> {
+        Some(self.transpose().solve(&Matrix::eye(self.num_cols()))?.transpose())
+    }
+
     pub fn solve_triangular(&self, lower: bool, rhs: &Matrix) -> Option<Matrix> {
         let mut sol = Matrix::zeros(self.shape.1, rhs.shape.1);
         let mut i = if lower { 0 } else { self.shape.0 - 1 };
@@ -438,6 +446,31 @@ fn inverse_roundtrip() {
     for _ in 0..1000 {
         let mat = Matrix::random_invertible(&mut rng, 10);
         assert_eq!(mat.inverse().and_then(|m| m.inverse()), Some(mat));
+    }
+}
+
+#[test]
+fn one_sided_inverse_rank() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random(&mut rng, 10, 12);
+        let rinv = mat.right_inverse();
+        if mat.rank() == mat.num_rows() {
+            assert!(rinv.is_some());
+            assert!(mat.dot(&rinv.unwrap()).is_identity());
+        } else {
+            assert!(rinv.is_none());
+        }
+
+        let mat = Matrix::random(&mut rng, 12, 10);
+        let linv = mat.left_inverse();
+        if mat.rank() == mat.num_cols() {
+            assert!(linv.is_some());
+            assert!(linv.unwrap().dot(&mat).is_identity());
+        } else {
+            assert!(linv.is_none());
+        }
     }
 }
 
