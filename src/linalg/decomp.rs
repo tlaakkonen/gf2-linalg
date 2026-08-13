@@ -573,6 +573,14 @@ impl Matrix {
             f.rad = true;
         }
 
+        if f.arf && f.rad {
+            f.cong_row_add(f.dim, 1);
+            f.cong_row_add(1, 0);
+            f.equiv_pair_add(0, f.dim);
+            f.equiv_pair_add(1, f.dim);
+            f.arf = false;
+        }
+
         f
     }
 }
