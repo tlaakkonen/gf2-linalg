@@ -97,6 +97,7 @@ impl Poly {
 
     #[cfg(feature = "rand")]
     pub fn random(rng: &mut impl rand::Rng, degree: usize) -> Poly {
+        use rand::RngExt;
         Poly::new((0..degree).map(|_| rng.random::<GF2>()))
     }
 

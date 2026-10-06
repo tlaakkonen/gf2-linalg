@@ -243,6 +243,7 @@ impl Matrix {
 
     #[cfg(feature = "rand")]
     pub fn random(rng: &mut impl rand::Rng, rows: usize, cols: usize) -> Matrix {
+        use rand::RngExt;
         Matrix::from_data((0..rows * cols).map(|_| rng.random()).collect(), (rows, cols))
     }
 

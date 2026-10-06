@@ -7,10 +7,10 @@ edition = "2024"
 default = ["rand"]
 
 [dependencies.rand]
-version = "0.9"
+version = "0.10"
 optional = true
 default-features = false
 
 [dev-dependencies.rand]
-version = "0.9"
+version = "0.10"
 default-features = true
