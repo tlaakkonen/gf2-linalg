@@ -1,4 +1,4 @@
-use crate::GF2;
+use crate::{GF2, LinearSpace, ToGF2};
 
 use std::{borrow::Borrow, fmt::{Debug, Display}, ops::{Add, AddAssign, Index, IndexMut, Mul, MulAssign, Sub, SubAssign}};
 
@@ -71,6 +71,12 @@ impl Matrix {
 
     pub fn from_data(data: Vec<GF2>, shape: (usize, usize)) -> Matrix {
         assert_eq!(data.len(), shape.0 * shape.1);
+        Matrix { data, shape }
+    }
+
+    pub fn from_rows<E: ToGF2, const N: usize>(rows: impl AsRef<[[E; N]]>) -> Matrix {
+        let data = rows.as_ref().iter().flatten().map(ToGF2::to_gf2).collect::<Vec<_>>();
+        let shape = (rows.as_ref().len(), N);
         Matrix { data, shape }
     }
 
@@ -471,6 +477,18 @@ impl Matrix {
             out[(i, i)] = diag[(0, i)];
         }
         out
+    }
+
+    pub fn vector_dot(&self, other: &Matrix) -> GF2 {
+        self.data.iter().zip(&other.data).map(|(&a, &b)| a * b).sum()
+    }
+
+    pub fn row_space(&self) -> LinearSpace {
+        LinearSpace::new(self.clone())
+    }
+
+    pub fn col_space(&self) -> LinearSpace {
+        LinearSpace::new(self.transpose())
     }
 }
 

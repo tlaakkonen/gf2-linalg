@@ -99,6 +99,10 @@ impl Poly {
     pub fn random(rng: &mut impl rand::Rng, degree: usize) -> Poly {
         Poly::new((0..degree).map(|_| rng.random::<GF2>()))
     }
+
+    pub fn coeff(&self, term: usize) -> GF2 {
+        GF2::new(self.terms.binary_search(&term).is_ok())
+    }
 }
 
 impl std::fmt::Debug for Poly {
@@ -283,6 +287,25 @@ impl std::ops::Neg for Poly {
 }
 
 impl Poly {
+    pub fn reciprocal(&self) -> Poly {
+        let n = self.degree();
+        let mut terms: Vec<_> = self.terms.iter().map(|&t| n - t).collect();
+        terms.reverse();
+        Poly { terms }
+    }
+
+    /// For irreducible f, compute the trace of self in F2[[x]]/(f) over F2
+    pub fn trace_mod(&self, f: &Poly) -> GF2 {
+        let mut g = self.rem(f);
+        let mut tr = g.eval(GF2::ZERO);
+        for _ in 0..f.degree().saturating_sub(1) {
+            g.square();
+            g = g.rem(f);
+            tr += g.eval(GF2::ZERO);
+        }
+        tr
+    }
+
     pub fn square(&mut self) {
         self.pow2k(1);
     }
@@ -297,22 +320,14 @@ impl Poly {
         self.terms.iter_mut().for_each(|t| *t <<= k)
     }
 
-    fn powmod_opt(&self, n: usize, m: Option<&Poly>) -> Poly {
+    pub fn pow(&self, n: usize) -> Poly {
         match n {
             0 => Poly::one(),
-            1 => if let Some(m) = m {
-                self.rem(m)
-            } else {
-                self.clone()
-            },
+            1 => self.clone(),
             n if n.is_power_of_two() => {
                 let mut x = self.clone();
                 x.pow2k(n.trailing_zeros() as usize);
-                if let Some(m) = m {
-                    x.rem(m)
-                } else {
-                    x
-                }
+                x
             },
             mut n => {
                 let mut x = self.clone();
@@ -323,9 +338,6 @@ impl Poly {
                 n >>= k;
                 loop {
                     y *= &x;
-                    if let Some(m) = m {
-                        y = y.rem(&m);
-                    }
                     n >>= 1;
 
                     if n == 0 {
@@ -340,12 +352,27 @@ impl Poly {
         }
     }
 
-    pub fn pow(&self, n: usize) -> Poly {
-        self.powmod_opt(n, None)
+    pub fn pow_mod(&self, mut n: usize, m: &Poly) -> Poly {
+        let mut x = self.clone();
+        let mut y = Poly::one();
+        while n != 0 {
+            if n % 2 == 1 {
+                y *= &x;
+                y = y.rem(m);
+            }
+            x.square();
+            x = x.rem(m);
+            n >>= 1;            
+        }
+        y
     }
 
-    pub fn pow_mod(&self, n: usize, modulus: &Poly) -> Poly {
-        self.powmod_opt(n, Some(modulus))
+    pub fn pow_mod_signed(&self, n: isize, m: &Poly) -> Option<Poly> {
+        Some(if n < 0 {
+            self.inv_mod(m)?.pow_mod((-n) as usize, m)
+        } else {
+            self.pow_mod(n as usize, m)
+        })
     }
 
     pub fn quot_rem(&self, d: &Poly) -> (Poly, Poly) {
@@ -417,6 +444,11 @@ impl Poly {
         }
 
         (r0, s0, t0)
+    }
+
+    pub fn inv_mod(&self, f: &Poly) -> Option<Poly> {
+        let (r, s, _) = self.extended_gcd(f);
+        r.is_one().then_some(s)
     }
 
     pub fn lcm(&self, rhs: &Poly) -> Poly {

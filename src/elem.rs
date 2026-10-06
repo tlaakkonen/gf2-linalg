@@ -39,24 +39,24 @@ impl From<GF2> for bool {
 }
 
 pub trait ToGF2 {
-    fn to_gf2(self) -> GF2;
+    fn to_gf2(&self) -> GF2;
 }
 
 impl ToGF2 for GF2 {
-    fn to_gf2(self) -> GF2 {
-        self
+    fn to_gf2(&self) -> GF2 {
+        *self
     }
 }
 
 impl ToGF2 for bool {
-    fn to_gf2(self) -> GF2 {
-        GF2(self)
+    fn to_gf2(&self) -> GF2 {
+        GF2(*self)
     }
 }
 
 macro_rules! impl_to_gf2_numeric {
     ($($t:ty),*) => {$(impl ToGF2 for $t {
-        fn to_gf2(self) -> GF2 {
+        fn to_gf2(&self) -> GF2 {
             GF2((self % 2) != 0)
         }
     })*};
