@@ -16,7 +16,7 @@
 The goals of the project are to be:
 * **Comprehensive**: While some other similar libraries contain most of the common linear algebraic operations, this library aims to cover as many possible. If there is a binary matrix decomposition or polynomial manipulation that you think is important but isn't in this library, then I consider that a bug, and you should file an issue! (PRs also welcome.)
 * **Easy to use**: Despite being written in Rust, this library aims to be easy to use and avoid the need for its users to be intimately familiar with lifetimes and the borrow checker. Consequently, we work mostly with owned values and avoid things like matrix views.
-* **Self-contained**: Pure Rust implementation to make building and linking as easy as possible. Minimal dependencies to avoid version conflicts and keep compile times fast. So far the only dependency is `rand` and it's optional.
+* **Self-contained**: Pure Rust implementation to make building and linking as easy as possible. Minimal dependencies to avoid version conflicts and keep compile times fast. So far the only dependencies are `rand` and `ndarray` and they're optional.
 
 I also have some explicit anti-goals:
 * **Extremely high performance**: While I'm not trying to write slow code, I'm not worrying about performance at the moment. For example, matrices are currently implemented without SIMD or even SWAR. If you need to work with 10000x10000 matrices, you may want to look elsewhere. There are plenty of fast Rust matrix libraries.
@@ -29,10 +29,10 @@ I also have some explicit anti-goals:
 
 Currently supported:
 * Linear subspaces with set-like operations
+* `ndarray` interface
 
 Planned:
 * Python bindings
-* `ndarray` interface
 
 **Matrix Operations**
 
