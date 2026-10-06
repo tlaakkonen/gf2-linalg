@@ -5,7 +5,124 @@ use std::{borrow::Borrow, fmt::{Debug, Display}, ops::{Add, AddAssign, Index, In
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Matrix {
     pub shape: (usize, usize),
-    data: Vec<GF2>
+    inner: matrix_impl::MatrixInner
+}
+
+mod matrix_impl {
+    use super::GF2;
+    use std::ops::Range;
+
+    #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+    pub struct MatrixInner {
+        data: Vec<GF2>
+    }
+
+    impl MatrixInner {
+        #[inline]
+        #[allow(unused)]
+        pub fn from_data(data: Vec<GF2>, pitch_hint: usize) -> Self {
+            Self { data }
+        }
+
+        #[inline]
+        pub fn set(&mut self, idx: usize, v: GF2) {
+            self.data[idx] = v;
+        }
+
+        #[inline]
+        pub fn get(&self, idx: usize) -> GF2 {
+            self.data[idx]
+        }
+
+        pub fn fill(&mut self, v: GF2) {
+            self.data.fill(v);
+        }
+
+        pub fn iter_range(&self, range: Range<usize>) -> impl Iterator<Item=GF2> {
+            self.data[range].iter().copied()
+        }
+
+        pub fn iter(&self) -> impl Iterator<Item=GF2> {
+            self.data.iter().copied()
+        }
+
+        pub fn extend(&mut self, other: &Self) {
+            self.data.extend_from_slice(&other.data)
+        }
+
+        pub fn extend_range(&mut self, other: &Self, range: Range<usize>) {
+            self.data.extend_from_slice(&other.data[range])
+        }
+
+        pub fn extend_iter(&mut self, iter: impl Iterator<Item=GF2>) {
+            self.data.extend(iter)
+        }
+
+        pub fn truncate(&mut self, len: usize) {
+            self.data.truncate(len);
+        }
+
+        pub fn index_mut(&mut self, idx: usize) -> &mut GF2 {
+            &mut self.data[idx]
+        }
+
+        pub fn add(&self, other: &Self) -> Self {
+            Self { data: self.data.iter().zip(&other.data).map(|(&a, &b)| a + b).collect() }
+        }
+
+        pub fn add_assign(&mut self, other: &Self) {
+            self.data.iter_mut().zip(&other.data).for_each(|(a, &b)| *a += b);
+        }
+
+        pub fn mul(&self, other: &Self) -> Self {
+            Self { data: self.data.iter().zip(&other.data).map(|(&a, &b)| a * b).collect() }
+        }
+
+        pub fn mul_assign(&mut self, other: &Self) {
+            self.data.iter_mut().zip(&other.data).for_each(|(a, &b)| *a *= b);
+        }
+
+        pub fn transpose(&self, rows: usize, cols: usize) -> Self {
+            let mut data = vec![GF2::ZERO; self.data.len()];
+            for i in 0..rows {
+                for j in 0..cols {
+                    data[j * rows + i] = self.data[i * cols + j];
+                }
+            }
+            Self { data }
+        }
+
+        pub fn swap_range_within(&mut self, a: Range<usize>, b: Range<usize>) {
+            if a == b { return }
+            let [a, b] = self.data.get_disjoint_mut([a, b]).unwrap();
+            a.swap_with_slice(b);
+        }
+
+        pub fn add_range_within(&mut self, source: Range<usize>, target: Range<usize>) {
+            if source == target {
+                self.data[target].fill(GF2::ZERO);
+            } else {
+                let [source, target] = self.data.get_disjoint_mut([source, target]).unwrap();
+                target.iter_mut().zip(source).for_each(|(a, &mut b)| *a += b);
+            }
+        }
+
+        pub fn add_range_assign(&mut self, target: Range<usize>, rhs: &Self, source: Range<usize>) {
+            self.data[target].iter_mut().zip(&rhs.data[source]).for_each(|(a, &b)| *a += b);
+        }
+
+        pub fn sum_range(&self, r: Range<usize>) -> GF2 {
+            self.data[r].iter().copied().sum()
+        }
+
+        pub fn weight_range(&self, r: Range<usize>) -> usize {
+            self.data[r].iter().copied().sum()
+        }
+
+        pub fn vector_dot_range(lhs: &Self, l: Range<usize>, rhs: &Self, r: Range<usize>) -> GF2 {
+            lhs.data[l].iter().zip(&rhs.data[r]).map(|(&a, &b)| a * b).sum()
+        }
+    }
 }
 
 impl Matrix {
@@ -18,10 +135,7 @@ impl Matrix {
     }
 
     pub fn zeros(rows: usize, cols: usize) -> Matrix {
-        Matrix {
-            data: vec![GF2::ZERO; rows * cols],
-            shape: (rows, cols)
-        }
+        Matrix::from_data(vec![GF2::ZERO; rows*cols], (rows, cols))
     }
 
     pub fn zeros_like(mat: &Matrix) -> Matrix {
@@ -29,10 +143,7 @@ impl Matrix {
     }
 
     pub fn ones(rows: usize, cols: usize) -> Matrix {
-        Matrix {
-            data: vec![GF2::ONE; rows * cols],
-            shape: (rows, cols)
-        }
+        Matrix::from_data(vec![GF2::ONE; rows*cols], (rows, cols))
     }
 
     pub fn ones_like(mat: &Matrix) -> Matrix {
@@ -54,30 +165,31 @@ impl Matrix {
     pub fn eye(n: usize) -> Matrix {
         let mut mat = Matrix::zeros(n, n);
         for i in 0..n {
-            mat.data[n * i + i] = GF2::ONE;
+            mat.inner.set(n * i + i, GF2::ONE);
         }
         mat
     }
 
     pub fn from_scalar(elem: GF2) -> Matrix {
-        Matrix { data: vec![elem], shape: (1, 1) }
+        Matrix::from_data(vec![elem], (1, 1))
     }
 
     pub fn basis_vector(n: usize, i: usize) -> Matrix {
         let mut data = vec![GF2::ZERO; n];
         data[i] = GF2::ONE;
-        Matrix { data, shape: (n, 1) }
+        Matrix::from_data(data, (n, 1))
     }
 
+    #[inline]
     pub fn from_data(data: Vec<GF2>, shape: (usize, usize)) -> Matrix {
         assert_eq!(data.len(), shape.0 * shape.1);
-        Matrix { data, shape }
+        Matrix { inner: matrix_impl::MatrixInner::from_data(data, shape.1), shape }
     }
 
     pub fn from_rows<E: ToGF2, const N: usize>(rows: impl AsRef<[[E; N]]>) -> Matrix {
         let data = rows.as_ref().iter().flatten().map(ToGF2::to_gf2).collect::<Vec<_>>();
         let shape = (rows.as_ref().len(), N);
-        Matrix { data, shape }
+        Matrix::from_data(data, shape)
     }
 
     pub fn block_diagonal(blocks: &[impl Borrow<Matrix>]) -> Matrix {
@@ -93,24 +205,24 @@ impl Matrix {
             let block: &Matrix = block.borrow();
             for i in 0..block.shape.0 {
                 data.resize(data.len() + offset, GF2::ZERO);
-                data.extend_from_slice(&block.data[i*block.shape.1..(i+1)*block.shape.1]);
+                data.extend(block.inner.iter_range(i*block.shape.1..(i+1)*block.shape.1));
                 data.resize(data.len() + size - block.shape.1 - offset, GF2::ZERO);
             }
             offset += block.shape.1;
         }
-        Matrix { data, shape: (size, size) }
+        Matrix::from_data(data, (size, size))
     }
 
     pub fn is_zeros(&self) -> bool {
-        self.data.iter().all(|&elem| elem == GF2::ZERO)
+        self.inner.iter().all(|elem| elem == GF2::ZERO)
     }
 
     pub fn is_identity(&self) -> bool {
-        self.data.iter().enumerate().all(|(i, &elem)| elem == (i / self.shape.1 == i % self.shape.1).into())
+        self.inner.iter().enumerate().all(|(i, elem)| elem == (i / self.shape.1 == i % self.shape.1).into())
     }
 
     pub fn is_ones(&self) -> bool {
-        self.data.iter().all(|&elem| elem == GF2::ONE)
+        self.inner.iter().all(|elem| elem == GF2::ONE)
     }
 
     pub fn is_square(&self) -> bool {
@@ -122,19 +234,16 @@ impl Matrix {
     }
 
     pub fn hamming_weight(&self) -> usize {
-        self.data.iter().copied().map(bool::from).map(usize::from).sum::<usize>()
+        self.inner.iter().map(bool::from).map(usize::from).sum::<usize>()
     }
 
     pub fn fill(&mut self, value: GF2) {
-        self.data.fill(value)
+        self.inner.fill(value)
     }
 
     #[cfg(feature = "rand")]
     pub fn random(rng: &mut impl rand::Rng, rows: usize, cols: usize) -> Matrix {
-        Matrix {
-            data: (0..rows * cols).map(|_| rng.random()).collect(),
-            shape: (rows, cols)
-        }
+        Matrix::from_data((0..rows * cols).map(|_| rng.random()).collect(), (rows, cols))
     }
 
     #[cfg(feature = "rand")]
@@ -148,7 +257,7 @@ impl Matrix {
     }
 
     pub fn iter(&self) -> impl Iterator<Item=GF2> {
-        self.data.iter().copied()
+        self.inner.iter()
     }
 }
 
@@ -302,15 +411,19 @@ impl Matrix {
             rows, cols, self.shape
         );
 
-        let mut data = Vec::with_capacity(rows.len() * cols.len());
+        let mut inner = matrix_impl::MatrixInner::from_data(Vec::new(), cols.len());
         for row in rows.clone() {
             match &cols {
-                SliceIndices::Range(cols) => data.extend_from_slice(&self.data[self.shape.1 * row + cols.start .. self.shape.1 * row + cols.end]),
-                SliceIndices::Slice(cols) => data.extend(cols.iter().map(|&col| self.data[self.shape.1 * row + col]))
+                SliceIndices::Range(cols) => {
+                    inner.extend_range(&self.inner, self.shape.1 * row + cols.start .. self.shape.1 * row + cols.end);
+                },
+                SliceIndices::Slice(cols) => {
+                    inner.extend_iter(cols.iter().map(|&col| self.inner.get(self.shape.1 * row + col)));
+                }
             }
             
         }
-        Matrix { data, shape: (rows.len(), cols.len()) }
+        Matrix { inner, shape: (rows.len(), cols.len()) }
     }
 
     pub fn row(&self, row: usize) -> Matrix {
@@ -322,13 +435,7 @@ impl Matrix {
     }
 
     pub fn transpose(&self) -> Matrix {
-        let mut data = vec![GF2::ZERO; self.shape.0 * self.shape.1];
-        for i in 0..self.shape.0 {
-            for j in 0..self.shape.1 {
-                data[j * self.shape.0 + i] = self.data[i * self.shape.1 + j];
-            }
-        }
-        Matrix { data, shape: (self.shape.1, self.shape.0) }
+        Matrix { inner: self.inner.transpose(self.shape.0, self.shape.1), shape: (self.shape.1, self.shape.0) }
     }
 
     pub fn broadcast_to(&self, shape: (usize, usize)) -> Matrix {
@@ -341,19 +448,19 @@ impl Matrix {
         if self.shape == shape {
             self.clone()
         } else if self.shape == (1, 1) {
-            Matrix { data: vec![self.data[0]; shape.0 * shape.1], shape }
+            Matrix::from_data(vec![self.inner.get(0); shape.0 * shape.1], shape)
         } else if self.shape.0 == 1 {
             let mut data = Vec::with_capacity(shape.0 * shape.1);
             for _ in 0..shape.0 {
-                data.extend_from_slice(&self.data);
+                data.extend(self.inner.iter());
             }
-            Matrix { data, shape }
+            Matrix::from_data(data, shape)
         } else {
             let mut data = vec![GF2::ZERO; shape.0 * shape.1];
             for i in 0..shape.0 {
-                data[i*shape.1..(i+1)*shape.1].fill(self.data[i]);
+                data[i*shape.1..(i+1)*shape.1].fill(self.inner.get(i));
             }
-            Matrix { data, shape }
+            Matrix::from_data(data, shape)
         }
     }
 
@@ -387,15 +494,15 @@ impl Matrix {
             "cannot hstack matrices of shapes {:?}", mats.iter().map(|m| m.borrow().shape).collect::<Vec<_>>()
         );
         let width = mats.iter().map(|m| m.borrow().shape.1).sum::<usize>();
-        let mut data = Vec::with_capacity(height * width);
+        let mut inner = matrix_impl::MatrixInner::from_data(Vec::new(), width);
         for i in 0..height {
             for mat in mats {
                 let mat = mat.borrow();
-                data.extend_from_slice(&mat.data[i*mat.shape.1..(i+1)*mat.shape.1]);
+                inner.extend_range(&mat.inner, i*mat.shape.1..(i+1)*mat.shape.1);
             }
         }
 
-        Matrix { data, shape: (height, width) }
+        Matrix { inner, shape: (height, width) }
     }
 
     pub fn vconcat(&self, other: &Matrix) -> Matrix {
@@ -410,36 +517,38 @@ impl Matrix {
             "cannot vstack matrices of shapes {:?}", mats.iter().map(|m| m.borrow().shape).collect::<Vec<_>>()
         );
         let height = mats.iter().map(|m| m.borrow().shape.0).sum::<usize>();
-        let mut data = Vec::with_capacity(height * width);
+        let mut inner = matrix_impl::MatrixInner::from_data(Vec::new(), width);
         for mat in mats {
-            data.extend_from_slice(&mat.borrow().data);
+            inner.extend(&mat.borrow().inner);
         }
-        Matrix { data, shape: (height, width) }
+        Matrix { inner, shape: (height, width) }
     }
 
     pub fn vappend(&mut self, other: &Matrix) {
         assert_eq!(other.shape.1, self.shape.1, 
             "cannot vappend matrix of shape {:?} to matrix of shape {:?}", other.shape, self.shape
         );
-        self.data.extend_from_slice(&other.data);
+        self.inner.extend(&other.inner);
         self.shape.0 += other.shape.0;
     }
 
     pub fn swap_remove_row(&mut self, i: usize) {
         self.row_swap(i, self.num_rows() - 1);
         self.shape.0 -= 1;
-        self.data.truncate(self.shape.0 * self.shape.1);
+        self.inner.truncate(self.shape.0 * self.shape.1);
     }
 
     pub fn remove_col(&mut self, i: usize) {
-        let mut idx = 0;
-        self.data.retain(|_| {
-            let ret = idx != i;
-            idx += 1;
-            if idx >= self.shape.1 { idx -= self.shape.1; }
-            ret
-        });
+        let mut data = Vec::new();
+        for r in 0..self.shape.0 {
+            for c in 0..self.shape.1 {
+                if c != i {
+                    data.push(self.inner.get(r * self.shape.1 + c));
+                }
+            }
+        }
         self.shape.1 -= 1;
+        self.inner = matrix_impl::MatrixInner::from_data(data, self.shape.1);
     }
 
     pub fn triu(&self) -> Matrix {
@@ -480,7 +589,10 @@ impl Matrix {
     }
 
     pub fn vector_dot(&self, other: &Matrix) -> GF2 {
-        self.data.iter().zip(&other.data).map(|(&a, &b)| a * b).sum()
+        matrix_impl::MatrixInner::vector_dot_range(
+            &self.inner, 0..self.shape.0*self.shape.1, 
+            &other.inner, 0..self.shape.0*self.shape.1
+        )
     }
 
     pub fn row_space(&self) -> LinearSpace {
@@ -501,7 +613,10 @@ impl Index<(usize, usize)> for Matrix {
             "index {:?} is out of bounds for matrix of size {:?}", (row, col), self.shape
         );
 
-        &self.data[self.shape.1 * row + col]
+        match self.inner.get(self.shape.1 * row + col) {
+            GF2::ONE => &GF2::ONE,
+            GF2::ZERO => &GF2::ZERO
+        }
     }
 }
 
@@ -512,7 +627,7 @@ impl IndexMut<(usize, usize)> for Matrix {
             "index {:?} is out of bounds for matrix of size {:?}", (row, col), self.shape
         );
 
-        &mut self.data[self.shape.1 * row + col]
+        self.inner.index_mut(self.shape.1 * row + col)
     }
 }
 
@@ -521,10 +636,7 @@ impl Add<&Matrix> for &Matrix {
 
     fn add(self, rhs: &Matrix) -> Matrix {
         assert_eq!(self.shape, rhs.shape, "cannot add matrices of differing shapes");
-        Matrix {
-            data: self.data.iter().zip(&rhs.data).map(|(&a, &b)| a + b).collect(),
-            shape: self.shape
-        }
+        Matrix { inner: self.inner.add(&rhs.inner), shape: self.shape }
     }
 }
 impl Add<Matrix> for &Matrix { type Output = Matrix; fn add(self, rhs: Matrix) -> Matrix { self + &rhs } }
@@ -538,7 +650,7 @@ impl Sub<Matrix> for Matrix { type Output = Matrix; fn sub(self, rhs: Matrix) ->
 impl AddAssign<&Matrix> for Matrix {
     fn add_assign(&mut self, rhs: &Matrix) {
         assert_eq!(self.shape, rhs.shape, "cannot add matrices of differing shapes");
-        self.data.iter_mut().zip(&rhs.data).for_each(|(a, &b)| *a += b);
+        self.inner.add_assign(&rhs.inner);
     }
 }
 impl AddAssign<Matrix> for Matrix { fn add_assign(&mut self, rhs: Matrix) { *self += &rhs; } }
@@ -550,10 +662,7 @@ impl Mul<&Matrix> for &Matrix {
 
     fn mul(self, rhs: &Matrix) -> Matrix {
         assert_eq!(self.shape, rhs.shape, "cannot element-wise multiply matrices of differing shapes");
-        Matrix {
-            data: self.data.iter().zip(&rhs.data).map(|(&a, &b)| a * b).collect(),
-            shape: self.shape
-        }
+        Matrix { inner: self.inner.mul(&rhs.inner), shape: self.shape }
     }
 }
 impl Mul<Matrix> for &Matrix { type Output = Matrix; fn mul(self, rhs: Matrix) -> Matrix { self * &rhs } }
@@ -563,7 +672,70 @@ impl Mul<Matrix> for Matrix { type Output = Matrix; fn mul(self, rhs: Matrix) ->
 impl MulAssign<&Matrix> for Matrix {
     fn mul_assign(&mut self, rhs: &Matrix) {
         assert_eq!(self.shape, rhs.shape, "cannot element-wise multiply matrices of differing shapes");
-        self.data.iter_mut().zip(&rhs.data).for_each(|(a, &b)| *a *= b);
+        self.inner.mul_assign(&rhs.inner);
     }
 }
 impl MulAssign<Matrix> for Matrix { fn mul_assign(&mut self, rhs: Matrix) { *self *= &rhs; } }
+
+impl Matrix {
+    pub fn dot(&self, other: &Matrix) -> Matrix {
+        assert_eq!(
+            self.shape.1, other.shape.0,
+            "cannot multiply matrix of shape {:?} with matrix of shape {:?}", self.shape, other.shape
+        );
+
+        let mut out = Matrix::zeros(self.shape.0, other.shape.1);
+        for i in 0..self.shape.0 {
+            for j in 0..self.shape.1 {
+                if self[(i, j)] == GF2::ONE {
+                    out.inner.add_range_assign(
+                        i*other.shape.1..(i+1)*other.shape.1, 
+                        &other.inner,
+                        j*other.shape.1..(j+1)*other.shape.1
+                    );
+                }
+            }
+        }
+        out
+    }
+
+    pub fn row_sum(&self, i: usize) -> GF2 {
+        self.inner.sum_range(i*self.shape.1..(i+1)*self.shape.1)
+    }
+
+    pub fn row_weight(&self, i: usize) -> usize {
+        self.inner.weight_range(i*self.shape.1..(i+1)*self.shape.1)
+    }
+
+    pub fn col_sum(&self, j: usize) -> GF2 {
+        (0..self.shape.0).map(|i| self[(i, j)]).sum()
+    }
+
+    pub fn col_weight(&self, j: usize) -> usize {
+        (0..self.shape.0).map(|i| self[(i, j)]).sum()
+    }
+
+    pub fn row_add(&mut self, source: usize, target: usize) {
+        self.inner.add_range_within(source*self.shape.1..(source+1)*self.shape.1, target*self.shape.1..(target+1)*self.shape.1);
+    }
+
+    pub fn row_swap(&mut self, a: usize, b: usize) {
+        self.inner.swap_range_within(a*self.shape.1..(a+1)*self.shape.1, b*self.shape.1..(b+1)*self.shape.1);
+    }
+
+    pub fn col_add(&mut self, source: usize, target: usize) {
+        for j in 0..self.shape.0 {
+            let value = self[(j, source)];
+            self[(j, target)] += value;
+        }
+    }
+
+    pub fn col_swap(&mut self, a: usize, b: usize) {
+        for j in 0..self.shape.0 {
+            let a_val = self[(j, a)];
+            let b_val = self[(j, b)];
+            self[(j, a)] = b_val;
+            self[(j, b)] = a_val;
+        }
+    }
+}
