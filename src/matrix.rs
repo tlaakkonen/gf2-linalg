@@ -311,6 +311,53 @@ impl Matrix {
     }
 }
 
+#[cfg(feature = "ndarray")]
+use ndarray::{ArrayBase, Ix0, Ix1, Ix2, Dimension, Array2, Data};
+
+#[cfg(feature = "ndarray")]
+impl Matrix {
+    pub fn from_ndarray<E: ToGF2, S: Data<Elem=E>, D: Dimension>(arr: ArrayBase<S, D>) -> Matrix {
+        match arr.shape().len() {
+            0 => {
+                let arr = arr.into_dimensionality::<Ix0>().unwrap();
+                Matrix::from_scalar(arr[()].to_gf2())
+            },
+            1 => {
+                let arr = arr.into_dimensionality::<Ix1>().unwrap();
+                Matrix::from_data((0..arr.dim()).map(|i| arr[i].to_gf2()).collect(), (arr.dim(), 1))
+            },
+            2 => {
+                let arr = arr.into_dimensionality::<Ix2>().unwrap();
+                Matrix::from_data((0..arr.dim().0).map(|i| {
+                    (0..arr.dim().1).map(move |j| (i, j))
+                }).flatten().map(|(i, j)| {
+                    arr[(i, j)].to_gf2()
+                }).collect(), arr.dim())
+            },
+            _ => panic!("only up to two-dimensional arrays are supported")
+        }
+    }
+
+    pub fn to_ndarray(&self) -> Array2<bool> {
+        Array2::from_shape_fn(self.shape, |(i, j)| self[(i, j)].into())
+    }
+}
+
+#[test]
+fn ndarray_roundtrip() {
+    use rand::{RngExt, SeedableRng};
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random(&mut rng, 31, 20);
+        let rmat = Matrix::from_ndarray(mat.to_ndarray());
+        assert_eq!(mat, rmat);
+
+        let mat = ndarray::Array2::from_shape_fn((20, 31), |_| rng.random::<bool>());
+        let rmat = Matrix::from_ndarray(mat.view()).to_ndarray();
+        assert_eq!(mat, rmat);
+    }
+}
+
 pub trait Slice<'r>: private::Slice<'r> {}
 
 use private::SliceIndices;

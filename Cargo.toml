@@ -4,13 +4,28 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["rand"]
+default = []
+rand = ["dep:rand"]
+ndarray = ["dep:ndarray"]
 
 [dependencies.rand]
 version = "0.10"
 optional = true
 default-features = false
 
+[dependencies.ndarray]
+version = "0.17"
+optional = true
+default-features = false
+
+[dev-dependencies.gf2-linalg]
+path = "."
+features = ["rand", "ndarray"]
+
 [dev-dependencies.rand]
 version = "0.10"
+default-features = true
+
+[dev-dependencies.ndarray]
+version = "0.17"
 default-features = true
