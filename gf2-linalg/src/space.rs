@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display};
 
-use crate::{GF2, Matrix};
+use crate::{GF2, Matrix, ShapeMismatchError, validate_shape};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct LinearSpace {
@@ -57,8 +57,8 @@ impl LinearSpace {
         self.basis.num_cols()
     }
 
-    pub fn reduce(&self, target: &mut Matrix) {
-        assert_eq!(target.num_cols(), self.basis.num_cols());
+    pub fn reduce_checked(&self, target: &mut Matrix) -> Result<(), ShapeMismatchError> {
+        validate_shape!(target.num_cols() == self.basis.num_cols(), self.basis.shape, target.shape, reduce);
         for r in 0..target.num_rows() {
             for (idx, &c) in self.pivots.iter().enumerate() {
                 if target[(r, c)] == GF2::ZERO { continue }
@@ -67,6 +67,11 @@ impl LinearSpace {
                 }
             }
         }
+        Ok(())
+    }
+
+    pub fn reduce(&self, target: &mut Matrix) {
+        self.reduce_checked(target).unwrap();
     }
 
     pub fn contains(&self, v: &Matrix) -> bool {

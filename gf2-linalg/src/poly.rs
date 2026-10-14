@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{Matrix, ToGF2, GF2};
+use crate::{GF2, InvalidInputError, Matrix, ToGF2, error::validate_input};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Poly {
@@ -295,7 +295,7 @@ impl Poly {
         Poly { terms }
     }
 
-    /// For irreducible f, compute the trace of self in F2[[x]]/(f) over F2
+    /// For irreducible f, compute the trace of self in F2\[\[x\]\]/(f) over F2
     pub fn trace_mod(&self, f: &Poly) -> GF2 {
         let mut g = self.rem(f);
         let mut tr = g.eval(GF2::ZERO);
@@ -376,8 +376,8 @@ impl Poly {
         })
     }
 
-    pub fn quot_rem(&self, d: &Poly) -> (Poly, Poly) {
-        assert!(!d.is_zero());
+    pub fn quot_rem_checked(&self, d: &Poly) -> Result<(Poly, Poly), InvalidInputError> {
+        validate_input!(!d.is_zero(), "divisor should be non-zero" in quot_rem);
 
         let d = &d.terms;
         let mut q = Vec::new();
@@ -393,7 +393,11 @@ impl Poly {
         }
 
         q.reverse();
-        (Poly { terms: q }, Poly { terms: r })
+        Ok((Poly { terms: q }, Poly { terms: r }))
+    }
+
+    pub fn quot_rem(&self, d: &Poly) -> (Poly, Poly) {
+        self.quot_rem_checked(d).unwrap()
     }
 
     pub fn quot(&self, d: &Poly) -> Poly {

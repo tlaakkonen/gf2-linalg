@@ -1,4 +1,4 @@
-use crate::{Matrix, Poly, GF2};
+use crate::{GF2, InvalidInputError, Matrix, Poly, ShapeMismatchError, validate_input, validate_shape};
 
 mod decomp;
 pub use decomp::*;
@@ -204,17 +204,17 @@ impl Matrix {
         mat.pivot_cols().1
     }
 
-    pub fn determinant(&self) -> GF2 {
-        assert_eq!(
-            self.shape.0, self.shape.1,
-            "cannot find determinant of non-square matrix with shape {:?}", self.shape
-        );
+    pub fn determinant_checked(&self) -> Result<GF2, InvalidInputError> {
+        validate_input!(self.is_square(), "determinant is not defined for non-square matrix with shape {:?}" in determinant, self.shape);
+        Ok((self.rank() == self.shape.0).into())
+    }
 
-        (self.rank() == self.shape.0).into()
+    pub fn determinant(&self) -> GF2 {
+        self.determinant_checked().unwrap()
     }
 
     pub fn is_invertible(&self) -> bool {
-        (self.shape.0 == self.shape.1) && self.determinant().into()
+        self.determinant_checked().unwrap_or(GF2::ZERO).into()
     }
 
     pub fn null_space(&self) -> Matrix {
@@ -249,11 +249,8 @@ impl Matrix {
         output
     }
 
-    pub fn solve(&self, rhs: &Matrix) -> Option<Matrix> {
-        assert_eq!(
-            self.shape.0, rhs.shape.0,
-            "cannot solve linear system with shapes {:?} and {:?}", self.shape, rhs.shape
-        );
+    pub fn solve_checked(&self, rhs: &Matrix) -> Result<Option<Matrix>, ShapeMismatchError> {
+        validate_shape!(self.shape.0 == rhs.shape.0, self.shape, rhs.shape, solve);
 
         let mut target = rhs.clone();
         let mut mat = self.clone();
@@ -261,7 +258,7 @@ impl Matrix {
         let (perm, rank) = mat.pivot_cols();
 
         if !target.slice(rank.., ..).is_zeros() {
-            return None
+            return Ok(None)
         }
 
         let mut sol = Matrix::zeros(self.shape.1, rhs.shape.1);
@@ -270,24 +267,28 @@ impl Matrix {
                 sol[(perm[i], j)] = target[(i, j)];
             }
         }
-        Some(sol)
+        Ok(Some(sol))
     }
 
-    pub fn inverse(&self) -> Option<Matrix> {
-        assert_eq!(
-            self.shape.0, self.shape.1,
-            "cannot invert non-square matrix with shape {:?}", self.shape
-        );
+    pub fn solve(&self, rhs: &Matrix) -> Option<Matrix> {
+        self.solve_checked(rhs).unwrap()
+    }
 
+    pub fn inverse_checked(&self) -> Result<Option<Matrix>, InvalidInputError> {
+        validate_input!(self.is_square(), "cannot invert non-square matrix with shape {:?}" in inverse, self.shape);
         let mut mat = self.clone();
         let mut output = Matrix::eye(self.shape.0);
         mat.row_reduce_ext(true, &mut output);
         
-        if (0..self.shape.0).all(|i| mat[(i, i)] == GF2::ONE) {
+        Ok(if (0..self.shape.0).all(|i| mat[(i, i)] == GF2::ONE) {
             Some(output)
         } else {
             None
-        }
+        })
+    }
+
+    pub fn inverse(&self) -> Option<Matrix> {
+        self.inverse_checked().unwrap()
     }
 
     pub fn right_inverse(&self) -> Option<Matrix> {
@@ -298,7 +299,20 @@ impl Matrix {
         Some(self.transpose().solve(&Matrix::eye(self.num_cols()))?.transpose())
     }
 
-    pub fn solve_triangular(&self, lower: bool, rhs: &Matrix) -> Option<Matrix> {
+    pub fn solve_triangular_checked(&self, lower: bool, rhs: &Matrix) -> Result<Option<Matrix>, InvalidInputError> {
+        validate_input!(self.is_square(), "input matrix must be square" in solve_triangular);
+        if lower {
+            validate_input!(
+                (0..self.shape.0).all(|i| (i+1..self.shape.1).all(|j| self[(i, j)] == GF2::ZERO)),
+                "`lower = true` was specified, but the matrix is not lower triangular" in solve_triangular
+            );
+        } else {
+            validate_input!(
+                (0..self.shape.0).all(|i| (0..i).all(|j| self[(i, j)] == GF2::ZERO)),
+                "`lower = false` was specified, but the matrix is not upper triangular" in solve_triangular
+            );
+        }
+
         let mut sol = Matrix::zeros(self.shape.1, rhs.shape.1);
         let mut i = if lower { 0 } else { self.shape.0 - 1 };
         loop {
@@ -334,7 +348,7 @@ impl Matrix {
                 }
             } else {
                 if !(0..rhs.shape.1).all(|k| rhs[(i, k)] == GF2::ZERO) {
-                    return None
+                    return Ok(None)
                 }
             }
 
@@ -347,7 +361,11 @@ impl Matrix {
             }
         }
 
-        Some(sol)
+        Ok(Some(sol))
+    }
+
+    fn solve_triangular(&self, lower: bool, rhs: &Matrix) -> Option<Matrix> {
+        self.solve_triangular_checked(lower, rhs).unwrap()
     }
 }
 

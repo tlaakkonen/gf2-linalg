@@ -1,4 +1,10 @@
-use crate::{GF2, LinearSpace, ToGF2};
+use crate::{
+    GF2, LinearSpace, ToGF2, 
+    error::{
+        InvalidInputError, SliceError, IndexError, ShapeMismatchError,
+        validate_input, validate_shape, validate_index
+    }
+};
 
 use std::{borrow::Borrow, fmt::{Debug, Display}, ops::{Add, AddAssign, Index, IndexMut, Mul, MulAssign, Sub, SubAssign}};
 
@@ -94,7 +100,8 @@ mod matrix_impl {
 
         pub fn swap_range_within(&mut self, a: Range<usize>, b: Range<usize>) {
             if a == b { return }
-            let [a, b] = self.data.get_disjoint_mut([a, b]).unwrap();
+            let [a, b] = self.data.get_disjoint_mut([a, b])
+                .expect("overlapping ranges passed to swap_range_within");
             a.swap_with_slice(b);
         }
 
@@ -102,7 +109,8 @@ mod matrix_impl {
             if source == target {
                 self.data[target].fill(GF2::ZERO);
             } else {
-                let [source, target] = self.data.get_disjoint_mut([source, target]).unwrap();
+                let [source, target] = self.data.get_disjoint_mut([source, target])
+                    .expect("overlapping ranges passed to add_range_within");
                 target.iter_mut().zip(source).for_each(|(a, &mut b)| *a += b);
             }
         }
@@ -174,16 +182,18 @@ impl Matrix {
         Matrix::from_data(vec![elem], (1, 1))
     }
 
-    pub fn basis_vector(n: usize, i: usize) -> Matrix {
-        let mut data = vec![GF2::ZERO; n];
-        data[i] = GF2::ONE;
-        Matrix::from_data(data, (n, 1))
+    #[inline]
+    pub fn from_data_checked(data: Vec<GF2>, shape: (usize, usize)) -> Result<Matrix, InvalidInputError> {
+        validate_input!(
+            data.len() == shape.0 * shape.1,
+            "data of length {:?} cannot be interpreted as a matrix of shape {:?}" in from_data, data.len(), shape
+        );
+        Ok(Matrix { inner: matrix_impl::MatrixInner::from_data(data, shape.1), shape })
     }
 
     #[inline]
     pub fn from_data(data: Vec<GF2>, shape: (usize, usize)) -> Matrix {
-        assert_eq!(data.len(), shape.0 * shape.1);
-        Matrix { inner: matrix_impl::MatrixInner::from_data(data, shape.1), shape }
+        Self::from_data_checked(data, shape).unwrap()
     }
 
     pub fn from_rows<E: ToGF2, const N: usize>(rows: impl AsRef<[[E; N]]>) -> Matrix {
@@ -192,12 +202,13 @@ impl Matrix {
         Matrix::from_data(data, shape)
     }
 
-    pub fn block_diagonal(blocks: &[impl Borrow<Matrix>]) -> Matrix {
-        assert!(
+    pub fn block_diagonal_checked(blocks: &[impl Borrow<Matrix>]) -> Result<Matrix, InvalidInputError> {
+        validate_input!(
             blocks.iter().all(|b|  b.borrow().is_square()),
-            "cannot assemble block-diagonal matrix from non-square blocks of shape {:?}",
+            "cannot assemble block-diagonal matrix from non-square blocks of shape {:?}" in block_diagonal,
             blocks.iter().map(|b| b.borrow().shape).collect::<Vec<_>>()
         );
+        
         let size = blocks.iter().map(|b| b.borrow().shape.1).sum::<usize>();
         let mut data = Vec::with_capacity(size * size);
         let mut offset = 0;
@@ -210,7 +221,11 @@ impl Matrix {
             }
             offset += block.shape.1;
         }
-        Matrix::from_data(data, (size, size))
+        Ok(Matrix::from_data(data, (size, size)))
+    }
+
+    pub fn block_diagonal(blocks: &[impl Borrow<Matrix>]) -> Matrix {
+        Self::block_diagonal_checked(blocks).unwrap()
     }
 
     pub fn is_zeros(&self) -> bool {
@@ -292,49 +307,43 @@ impl Matrix {
     pub fn to_latex(&self) -> String {
         use std::fmt::Write;
         let mut f = String::new();
-        write!(f, "\\begin{{pmatrix}}\n  ").unwrap();
+        let _ = write!(f, "\\begin{{pmatrix}}\n  ");
         for row in 0..self.shape.0 {
             for col in 0..self.shape.1 {
                 if col < self.shape.1 - 1 {
-                    write!(f, "{} & ", self[(row, col)]).unwrap();
+                    let _ = write!(f, "{} & ", self[(row, col)]);
                 } else {
-                    write!(f, "{} \\\\", self[(row, col)]).unwrap();
+                    let _ = write!(f, "{} \\\\", self[(row, col)]);
                 }
             }
 
             if row < self.shape.0 - 1 {
-                write!(f, "\n  ").unwrap();
+                let _ = write!(f, "\n  ");
             }
         }
-        write!(f, "\n\\end{{pmatrix}}").unwrap();
+        let _ = write!(f, "\n\\end{{pmatrix}}");
         f
     }
 }
 
 #[cfg(feature = "ndarray")]
-use ndarray::{ArrayBase, Ix0, Ix1, Ix2, Dimension, Array2, Data};
+use ndarray::{ArrayBase, Ix0, Ix1, Ix2, Dimension, DimMax, Array2, Data};
 
 #[cfg(feature = "ndarray")]
 impl Matrix {
-    pub fn from_ndarray<E: ToGF2, S: Data<Elem=E>, D: Dimension>(arr: ArrayBase<S, D>) -> Matrix {
-        match arr.shape().len() {
-            0 => {
-                let arr = arr.into_dimensionality::<Ix0>().unwrap();
-                Matrix::from_scalar(arr[()].to_gf2())
-            },
-            1 => {
-                let arr = arr.into_dimensionality::<Ix1>().unwrap();
-                Matrix::from_data((0..arr.dim()).map(|i| arr[i].to_gf2()).collect(), (arr.dim(), 1))
-            },
-            2 => {
-                let arr = arr.into_dimensionality::<Ix2>().unwrap();
-                Matrix::from_data((0..arr.dim().0).map(|i| {
-                    (0..arr.dim().1).map(move |j| (i, j))
-                }).flatten().map(|(i, j)| {
-                    arr[(i, j)].to_gf2()
-                }).collect(), arr.dim())
-            },
-            _ => panic!("only up to two-dimensional arrays are supported")
+    pub fn from_ndarray<E: ToGF2, S: Data<Elem=E>, D: Dimension + DimMax<Ix2,Output=Ix2>>(arr: ArrayBase<S, D>) -> Matrix {
+        if let Ok(arr) = arr.view().into_dimensionality::<Ix0>() {
+            Matrix::from_scalar(arr[()].to_gf2())
+        } else if let Ok(arr) = arr.view().into_dimensionality::<Ix1>() {
+            Matrix::from_data((0..arr.dim()).map(|i| arr[i].to_gf2()).collect(), (arr.dim(), 1))
+        } else if let Ok(arr) = arr.view().into_dimensionality::<Ix2>() {
+            Matrix::from_data((0..arr.dim().0).map(|i| {
+                (0..arr.dim().1).map(move |j| (i, j))
+            }).flatten().map(|(i, j)| {
+                arr[(i, j)].to_gf2()
+            }).collect(), arr.dim())
+        } else {
+            unreachable!()
         }
     }
 
@@ -358,46 +367,70 @@ fn ndarray_roundtrip() {
     }
 }
 
+#[allow(private_bounds)]
 pub trait Slice<'r>: private::Slice<'r> {}
 
-use private::SliceIndices;
+#[derive(Clone)]
+enum SliceIndices<'r> {
+    Range(std::ops::Range<usize>),
+    Slice(&'r [usize])
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum SliceIndicesOwned {
+    Index(usize),
+    Range(std::ops::Range<usize>),
+    Slice(Vec<usize>)
+}
+
+impl<'r> SliceIndices<'r> {
+    fn len(&self) -> usize {
+        match self {
+            SliceIndices::Range(r) => r.end - r.start,
+            SliceIndices::Slice(s) => s.len()
+        }
+    }
+
+    fn to_owned(&self) -> SliceIndicesOwned {
+        match self {
+            SliceIndices::Range(r) => SliceIndicesOwned::Range(r.clone()),
+            SliceIndices::Slice(s) => SliceIndicesOwned::Slice(s.to_vec())
+        }
+    }
+}
+
+impl<'r> std::fmt::Display for SliceIndices<'r> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SliceIndices::Range(r) => write!(f, "{}..{}", r.start, r.end),
+            SliceIndices::Slice(s) => write!(f, "{:?}", s)
+        }
+    }
+}
+
+impl<'r> std::fmt::Display for SliceIndicesOwned {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SliceIndicesOwned::Index(idx) => write!(f, "{}", idx),
+            SliceIndicesOwned::Range(r) => write!(f, "{}", SliceIndices::Range(r.clone())),
+            SliceIndicesOwned::Slice(s) => write!(f, "{}", SliceIndices::Slice(s.as_slice()))
+        }
+    }
+}
+
+impl<'r> Iterator for SliceIndices<'r> {
+    type Item = usize;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            SliceIndices::Range(r) => (r.start < r.end).then(|| { r.start += 1; r.start - 1 }),
+            SliceIndices::Slice(s) => s.split_first().map(|(&val, ns)| { *s = ns; val })
+        }
+    }
+}
+
 mod private {
-    #[derive(Clone)]
-    pub enum SliceIndices<'r> {
-        Range(std::ops::Range<usize>),
-        Slice(&'r [usize])
-    }
-
-    impl<'r> SliceIndices<'r> {
-        pub fn len(&self) -> usize {
-            match self {
-                SliceIndices::Range(r) => r.end - r.start,
-                SliceIndices::Slice(s) => s.len()
-            }
-        }
-    }
-
-    impl<'r> std::fmt::Display for SliceIndices<'r> {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                SliceIndices::Range(r) => write!(f, "{}..{}", r.start, r.end),
-                SliceIndices::Slice(s) => write!(f, "{:?}", s)
-            }
-        }
-    }
-
-    impl<'r> Iterator for SliceIndices<'r> {
-        type Item = usize;
-        fn next(&mut self) -> Option<Self::Item> {
-            match self {
-                SliceIndices::Range(r) => (r.start < r.end).then(|| { r.start += 1; r.start - 1 }),
-                SliceIndices::Slice(s) => s.split_first().map(|(&val, ns)| { *s = ns; val })
-            }
-        }
-    }
-
-    pub trait Slice<'r> {
-        fn to_slice_indices(self, len: usize) -> (SliceIndices<'r>, bool);
+    pub(super) trait Slice<'r> {
+        fn to_slice_indices(self, len: usize) -> (super::SliceIndices<'r>, bool);
     }
 }
 
@@ -450,15 +483,17 @@ impl_slice_bounds!(
 );
 
 impl Matrix {
-    pub fn slice<'m>(&'m self, rows: impl Slice<'m>, cols: impl Slice<'m>) -> Matrix {
+    pub fn slice_checked<'m>(&'m self, rows: impl Slice<'m>, cols: impl Slice<'m>) -> Result<Matrix, SliceError> {
         let (rows, rvalid) = rows.to_slice_indices(self.shape.0);
         let (cols, cvalid) = cols.to_slice_indices(self.shape.1);
-        assert!(
-            rvalid && cvalid, 
-            "slice ({}, {}) is out of bounds for matrix of size {:?}", 
-            rows, cols, self.shape
-        );
-
+        if !rvalid || !cvalid {
+            return Err(SliceError {
+                rows: rows.to_owned(),
+                cols: cols.to_owned(),
+                shape: self.shape
+            });
+        }
+        
         let mut inner = matrix_impl::MatrixInner::from_data(Vec::new(), cols.len());
         for row in rows.clone() {
             match &cols {
@@ -471,7 +506,44 @@ impl Matrix {
             }
             
         }
-        Matrix { inner, shape: (rows.len(), cols.len()) }
+        Ok(Matrix { inner, shape: (rows.len(), cols.len()) })
+    }
+
+    pub fn slice<'m>(&'m self, rows: impl Slice<'m>, cols: impl Slice<'m>) -> Matrix {
+        self.slice_checked(rows, cols).unwrap()
+    }
+
+    pub fn get_checked(&self, row: usize, col: usize) -> Result<GF2, SliceError> {
+        if !(row < self.shape.0 && col < self.shape.1) {
+            return Err(SliceError {
+                rows: SliceIndicesOwned::Index(row),
+                cols: SliceIndicesOwned::Index(col),
+                shape: self.shape
+            })
+        }
+        Ok(self.inner.get(self.shape.1 * row + col))
+    }
+
+    pub fn get_mut_checked(&mut self, row: usize, col: usize) -> Result<&mut GF2, SliceError> {
+        if !(row < self.shape.0 && col < self.shape.1) {
+            return Err(SliceError {
+                rows: SliceIndicesOwned::Index(row),
+                cols: SliceIndicesOwned::Index(col),
+                shape: self.shape
+            })
+        }
+        Ok(self.inner.index_mut(self.shape.1 * row + col))
+    }
+    
+    pub fn set_checked(&mut self, row: usize, col: usize, value: GF2) -> Result<(), SliceError> {
+        if !(row < self.shape.0 && col < self.shape.1) {
+            return Err(SliceError {
+                rows: SliceIndicesOwned::Index(row),
+                cols: SliceIndicesOwned::Index(col),
+                shape: self.shape
+            })
+        }
+        Ok(self.inner.set(self.shape.1 * row + col, value))
     }
 
     pub fn row(&self, row: usize) -> Matrix {
@@ -486,14 +558,16 @@ impl Matrix {
         Matrix { inner: self.inner.transpose(self.shape.0, self.shape.1), shape: (self.shape.1, self.shape.0) }
     }
 
-    pub fn broadcast_to(&self, shape: (usize, usize)) -> Matrix {
-        assert!(
-            self.shape == shape || self.shape == (1, 1) || 
-            (self.shape.0 == shape.0 && self.shape.1 == 1) || (self.shape.1 == shape.1 && self.shape.0 == 1),
-            "shape {:?} cannot be broadcast to shape {:?}", self.shape, shape
+    pub fn broadcast_to_checked(&self, shape: (usize, usize)) -> Result<Matrix, InvalidInputError> {
+        validate_input!(
+            self.shape == shape 
+                || self.shape == (1, 1) 
+                || (self.shape.0 == shape.0 && self.shape.1 == 1) 
+                || (self.shape.1 == shape.1 && self.shape.0 == 1),
+            "shape {:?} cannot be broadcast to shape {:?}" in broadcast_to, self.shape, shape
         );
-
-        if self.shape == shape {
+        
+        Ok(if self.shape == shape {
             self.clone()
         } else if self.shape == (1, 1) {
             Matrix::from_data(vec![self.inner.get(0); shape.0 * shape.1], shape)
@@ -509,20 +583,29 @@ impl Matrix {
                 data[i*shape.1..(i+1)*shape.1].fill(self.inner.get(i));
             }
             Matrix::from_data(data, shape)
-        }
+        })
     }
 
-    pub fn reshape(mut self, rows: usize, cols: usize) -> Matrix {
-        self.reshape_in_place(rows, cols);
-        self
+    pub fn broadcast_to(&self, shape: (usize, usize)) -> Matrix {
+        self.broadcast_to_checked(shape).unwrap()
     }
 
-    pub fn reshape_in_place(&mut self, rows: usize, cols: usize) {
-        assert_eq!(
-            self.shape.0 * self.shape.1, rows * cols, 
-            "shape {:?} cannot be reshaped to {:?}", self.shape, (rows, cols)
+    pub fn reshape_checked(mut self, rows: usize, cols: usize) -> Result<Matrix, ShapeMismatchError> {
+        self.reshape_in_place_checked(rows, cols)?;
+        Ok(self)
+    }
+
+    pub fn reshape(self, rows: usize, cols: usize) -> Matrix {
+        self.reshape_checked(rows, cols).unwrap()
+    }
+
+    pub fn reshape_in_place_checked(&mut self, rows: usize, cols: usize) -> Result<(), ShapeMismatchError> {
+        validate_shape!(
+            self.shape.0 * self.shape.1 == rows * cols, 
+            self.shape, (rows, cols), reshape
         );
-        self.shape = (rows, cols)
+        self.shape = (rows, cols);
+        Ok(())
     }
 
     pub fn ravel(self) -> Matrix {
@@ -530,17 +613,14 @@ impl Matrix {
         self.reshape(num_elements, 1)
     }
 
-    pub fn hconcat(&self, other: &Matrix) -> Matrix {
-        Matrix::hstack(&[self, other])
-    }
-
-    pub fn hstack(mats: &[impl Borrow<Matrix>]) -> Matrix {
-        assert!(mats.len() > 0, "cannot stack list of empty matrices");
+    pub fn hstack_checked(mats: &[impl Borrow<Matrix>]) -> Result<Matrix, InvalidInputError> {
+        validate_input!(mats.len() > 0, "cannot stack list of empty matrices" in hstack);
         let height = mats[0].borrow().shape.0;
-        assert!(
+        validate_input!(
             mats.iter().all(|m| m.borrow().shape.0 == height), 
-            "cannot hstack matrices of shapes {:?}", mats.iter().map(|m| m.borrow().shape).collect::<Vec<_>>()
+            "cannot hstack matrices of shapes {:?}" in hstack, mats.iter().map(|m| m.borrow().shape).collect::<Vec<_>>()
         );
+        
         let width = mats.iter().map(|m| m.borrow().shape.1).sum::<usize>();
         let mut inner = matrix_impl::MatrixInner::from_data(Vec::new(), width);
         for i in 0..height {
@@ -550,7 +630,30 @@ impl Matrix {
             }
         }
 
-        Matrix { inner, shape: (height, width) }
+        Ok(Matrix { inner, shape: (height, width) })
+    }
+
+    pub fn hconcat(&self, other: &Matrix) -> Matrix {
+        Matrix::hstack(&[self, other])
+    }
+
+    pub fn hstack(mats: &[impl Borrow<Matrix>]) -> Matrix {
+        Self::hstack_checked(mats).unwrap()
+    }
+
+    pub fn vstack_checked(mats: &[impl Borrow<Matrix>]) -> Result<Matrix, InvalidInputError> {
+        validate_input!(mats.len() > 0, "cannot stack list of empty matrices" in vstack);
+        let width = mats[0].borrow().shape.1;
+        validate_input!(
+            mats.iter().all(|m| m.borrow().shape.1 == width),
+            "cannot vstack matrices of shapes {:?}" in vstack, mats.iter().map(|m| m.borrow().shape).collect::<Vec<_>>()
+        );
+        let height = mats.iter().map(|m| m.borrow().shape.0).sum::<usize>();
+        let mut inner = matrix_impl::MatrixInner::from_data(Vec::new(), width);
+        for mat in mats {
+            inner.extend(&mat.borrow().inner);
+        }
+        Ok(Matrix { inner, shape: (height, width) })
     }
 
     pub fn vconcat(&self, other: &Matrix) -> Matrix {
@@ -558,35 +661,37 @@ impl Matrix {
     }
 
     pub fn vstack(mats: &[impl Borrow<Matrix>]) -> Matrix {
-        assert!(mats.len() > 0, "cannot stack list of empty matrices");
-        let width = mats[0].borrow().shape.1;
-        assert!(
-            mats.iter().all(|m| m.borrow().shape.1 == width),
-            "cannot vstack matrices of shapes {:?}", mats.iter().map(|m| m.borrow().shape).collect::<Vec<_>>()
-        );
-        let height = mats.iter().map(|m| m.borrow().shape.0).sum::<usize>();
-        let mut inner = matrix_impl::MatrixInner::from_data(Vec::new(), width);
-        for mat in mats {
-            inner.extend(&mat.borrow().inner);
-        }
-        Matrix { inner, shape: (height, width) }
+        Self::vstack_checked(mats).unwrap()
     }
 
-    pub fn vappend(&mut self, other: &Matrix) {
-        assert_eq!(other.shape.1, self.shape.1, 
-            "cannot vappend matrix of shape {:?} to matrix of shape {:?}", other.shape, self.shape
+    pub fn vappend_checked(&mut self, other: &Matrix) -> Result<(), ShapeMismatchError> {
+        validate_shape!(
+            other.shape.1 == self.shape.1,
+            self.shape, other.shape, vappend
         );
         self.inner.extend(&other.inner);
         self.shape.0 += other.shape.0;
+        Ok(())
     }
 
-    pub fn swap_remove_row(&mut self, i: usize) {
+    pub fn vappend(&mut self, other: &Matrix) {
+        self.vappend_checked(other).unwrap();
+    }
+
+    pub fn swap_remove_row_checked(&mut self, i: usize) -> Result<(), IndexError> {
+        validate_index!(i < self.shape.0, row i, self.shape, swap_remove_row);
         self.row_swap(i, self.num_rows() - 1);
         self.shape.0 -= 1;
         self.inner.truncate(self.shape.0 * self.shape.1);
+        Ok(())
     }
 
-    pub fn remove_col(&mut self, i: usize) {
+    pub fn swap_remove_row(&mut self, i: usize) {
+        self.swap_remove_row_checked(i).unwrap();
+    }
+
+    pub fn remove_col_checked(&mut self, i: usize) -> Result<(), IndexError> {
+        validate_index!(i < self.shape.1, col i, self.shape, remove_col);
         let mut data = Vec::new();
         for r in 0..self.shape.0 {
             for c in 0..self.shape.1 {
@@ -597,6 +702,11 @@ impl Matrix {
         }
         self.shape.1 -= 1;
         self.inner = matrix_impl::MatrixInner::from_data(data, self.shape.1);
+        Ok(())
+    }
+
+    pub fn remove_col(&mut self, i: usize) {
+        self.remove_col_checked(i).unwrap();
     }
 
     pub fn triu(&self) -> Matrix {
@@ -627,20 +737,33 @@ impl Matrix {
         out
     }
 
-    pub fn from_diag(diag: &Matrix) -> Matrix {
-        assert_eq!(diag.num_rows(), 1, "input to from_diag must be a row vector");
+    pub fn from_diag_checked(diag: &Matrix) -> Result<Matrix, InvalidInputError> {
+        validate_input!(diag.num_rows() == 1, "must be a row vector" in from_diag);
         let mut out = Matrix::zeros(diag.num_cols(), diag.num_cols());
         for i in 0..diag.num_cols() {
             out[(i, i)] = diag[(0, i)];
         }
-        out
+        Ok(out)
+    }
+
+    pub fn from_diag(diag: &Matrix) -> Matrix {
+        Self::from_diag_checked(diag).unwrap()
+    }
+
+    pub fn vector_dot_checked(&self, other: &Matrix) -> Result<GF2, ShapeMismatchError> {
+        validate_shape!(
+            self.shape == other.shape,
+            self.shape, other.shape, vector_dot
+        );
+
+        Ok(matrix_impl::MatrixInner::vector_dot_range(
+            &self.inner, 0..self.shape.0*self.shape.1, 
+            &other.inner, 0..self.shape.0*self.shape.1
+        ))
     }
 
     pub fn vector_dot(&self, other: &Matrix) -> GF2 {
-        matrix_impl::MatrixInner::vector_dot_range(
-            &self.inner, 0..self.shape.0*self.shape.1, 
-            &other.inner, 0..self.shape.0*self.shape.1
-        )
+        self.vector_dot_checked(other).unwrap()
     }
 
     pub fn row_space(&self) -> LinearSpace {
@@ -656,12 +779,7 @@ impl Index<(usize, usize)> for Matrix {
     type Output = GF2;
 
     fn index(&self, (row, col): (usize, usize)) -> &GF2 {
-        assert!(
-            row < self.shape.0 && col < self.shape.1,
-            "index {:?} is out of bounds for matrix of size {:?}", (row, col), self.shape
-        );
-
-        match self.inner.get(self.shape.1 * row + col) {
+        match self.get_checked(row, col).unwrap() {
             GF2::ONE => &GF2::ONE,
             GF2::ZERO => &GF2::ZERO
         }
@@ -670,12 +788,43 @@ impl Index<(usize, usize)> for Matrix {
 
 impl IndexMut<(usize, usize)> for Matrix {
     fn index_mut(&mut self, (row, col): (usize, usize)) -> &mut GF2 {
-        assert!(
-            row < self.shape.0 && col < self.shape.1,
-            "index {:?} is out of bounds for matrix of size {:?}", (row, col), self.shape
-        );
+        self.get_mut_checked(row, col).unwrap()
+    }
+}
 
-        self.inner.index_mut(self.shape.1 * row + col)
+impl Matrix {
+    fn add_checked(&self, rhs: &Matrix) -> Result<Matrix, ShapeMismatchError> {
+        validate_shape!(
+            self.shape == rhs.shape,
+            self.shape, rhs.shape, add
+        );
+        Ok(Matrix { inner: self.inner.add(&rhs.inner), shape: self.shape })
+    }
+
+    fn add_assign_checked(&mut self, rhs: &Matrix) -> Result<(), ShapeMismatchError> {
+        validate_shape!(
+            self.shape == rhs.shape,
+            self.shape, rhs.shape, add_assign
+        );
+        self.inner.add_assign(&rhs.inner);
+        Ok(())
+    }
+
+    fn mul_checked(&self, rhs: &Matrix) -> Result<Matrix, ShapeMismatchError> {
+        validate_shape!(
+            self.shape == rhs.shape,
+            self.shape, rhs.shape, mul
+        );
+        Ok(Matrix { inner: self.inner.mul(&rhs.inner), shape: self.shape })
+    }
+
+    fn mul_assign_checked(&mut self, rhs: &Matrix) -> Result<(), ShapeMismatchError>{
+        validate_shape!(
+            self.shape == rhs.shape,
+            self.shape, rhs.shape, mul_assign
+        );
+        self.inner.mul_assign(&rhs.inner);
+        Ok(())
     }
 }
 
@@ -683,8 +832,7 @@ impl Add<&Matrix> for &Matrix {
     type Output = Matrix;
 
     fn add(self, rhs: &Matrix) -> Matrix {
-        assert_eq!(self.shape, rhs.shape, "cannot add matrices of differing shapes");
-        Matrix { inner: self.inner.add(&rhs.inner), shape: self.shape }
+        self.add_checked(rhs).unwrap()
     }
 }
 impl Add<Matrix> for &Matrix { type Output = Matrix; fn add(self, rhs: Matrix) -> Matrix { self + &rhs } }
@@ -697,8 +845,7 @@ impl Sub<Matrix> for Matrix { type Output = Matrix; fn sub(self, rhs: Matrix) ->
 
 impl AddAssign<&Matrix> for Matrix {
     fn add_assign(&mut self, rhs: &Matrix) {
-        assert_eq!(self.shape, rhs.shape, "cannot add matrices of differing shapes");
-        self.inner.add_assign(&rhs.inner);
+        self.add_assign_checked(rhs).unwrap();
     }
 }
 impl AddAssign<Matrix> for Matrix { fn add_assign(&mut self, rhs: Matrix) { *self += &rhs; } }
@@ -709,8 +856,7 @@ impl Mul<&Matrix> for &Matrix {
     type Output = Matrix;
 
     fn mul(self, rhs: &Matrix) -> Matrix {
-        assert_eq!(self.shape, rhs.shape, "cannot element-wise multiply matrices of differing shapes");
-        Matrix { inner: self.inner.mul(&rhs.inner), shape: self.shape }
+        self.mul_checked(rhs).unwrap()
     }
 }
 impl Mul<Matrix> for &Matrix { type Output = Matrix; fn mul(self, rhs: Matrix) -> Matrix { self * &rhs } }
@@ -719,17 +865,16 @@ impl Mul<Matrix> for Matrix { type Output = Matrix; fn mul(self, rhs: Matrix) ->
 
 impl MulAssign<&Matrix> for Matrix {
     fn mul_assign(&mut self, rhs: &Matrix) {
-        assert_eq!(self.shape, rhs.shape, "cannot element-wise multiply matrices of differing shapes");
-        self.inner.mul_assign(&rhs.inner);
+        self.mul_assign_checked(rhs).unwrap();
     }
 }
 impl MulAssign<Matrix> for Matrix { fn mul_assign(&mut self, rhs: Matrix) { *self *= &rhs; } }
 
 impl Matrix {
-    pub fn dot(&self, other: &Matrix) -> Matrix {
-        assert_eq!(
-            self.shape.1, other.shape.0,
-            "cannot multiply matrix of shape {:?} with matrix of shape {:?}", self.shape, other.shape
+    pub fn dot_checked(&self, other: &Matrix) -> Result<Matrix, ShapeMismatchError> {
+        validate_shape!(
+            self.shape.1 == other.shape.0,
+            self.shape, other.shape, dot
         );
 
         let mut out = Matrix::zeros(self.shape.0, other.shape.1);
@@ -744,46 +889,98 @@ impl Matrix {
                 }
             }
         }
-        out
+        Ok(out)
+    }
+
+    pub fn dot(&self, other: &Matrix) -> Matrix {
+        self.dot_checked(other).unwrap()
+    }
+
+    pub fn row_sum_checked(&self, i: usize) -> Result<GF2, IndexError> {
+        validate_index!(i < self.shape.0, row i, self.shape, row_sum);
+        Ok(self.inner.sum_range(i*self.shape.1..(i+1)*self.shape.1))
     }
 
     pub fn row_sum(&self, i: usize) -> GF2 {
-        self.inner.sum_range(i*self.shape.1..(i+1)*self.shape.1)
+        self.row_sum_checked(i).unwrap()
+    }
+
+    pub fn row_weight_checked(&self, i: usize) -> Result<usize, IndexError> {
+        validate_index!(i < self.shape.0, row i, self.shape, row_weight);
+        Ok(self.inner.weight_range(i*self.shape.1..(i+1)*self.shape.1))
     }
 
     pub fn row_weight(&self, i: usize) -> usize {
-        self.inner.weight_range(i*self.shape.1..(i+1)*self.shape.1)
+        self.row_weight_checked(i).unwrap()
+    }
+
+    pub fn col_sum_checked(&self, j: usize) -> Result<GF2, IndexError> {
+        validate_index!(j < self.shape.1, col j, self.shape, col_sum);
+        Ok((0..self.shape.0).map(|i| self[(i, j)]).sum())
     }
 
     pub fn col_sum(&self, j: usize) -> GF2 {
-        (0..self.shape.0).map(|i| self[(i, j)]).sum()
+        self.col_sum_checked(j).unwrap()
+    }
+
+    pub fn col_weight_checked(&self, j: usize) -> Result<usize, IndexError> {
+        validate_index!(j < self.shape.1, col j, self.shape, col_weight);
+        Ok((0..self.shape.0).map(|i| self[(i, j)]).sum())
     }
 
     pub fn col_weight(&self, j: usize) -> usize {
-        (0..self.shape.0).map(|i| self[(i, j)]).sum()
+        self.col_weight_checked(j).unwrap()
+    }
+
+    pub fn row_add_checked(&mut self, source: usize, target: usize) -> Result<(), IndexError> {
+        validate_index!(source < self.shape.0, row source, self.shape, row_add);
+        validate_index!(target < self.shape.0, row target, self.shape, row_add);
+        self.inner.add_range_within(source*self.shape.1..(source+1)*self.shape.1, target*self.shape.1..(target+1)*self.shape.1);
+        Ok(())
     }
 
     pub fn row_add(&mut self, source: usize, target: usize) {
-        self.inner.add_range_within(source*self.shape.1..(source+1)*self.shape.1, target*self.shape.1..(target+1)*self.shape.1);
+        self.row_add_checked(source, target).unwrap();
+    }
+
+    pub fn row_swap_checked(&mut self, a: usize, b: usize) -> Result<(), IndexError> {
+        validate_index!(a < self.shape.0, row a, self.shape, row_swap);
+        validate_index!(b < self.shape.0, row b, self.shape, row_swap);
+        self.inner.swap_range_within(a*self.shape.1..(a+1)*self.shape.1, b*self.shape.1..(b+1)*self.shape.1);
+        Ok(())
     }
 
     pub fn row_swap(&mut self, a: usize, b: usize) {
-        self.inner.swap_range_within(a*self.shape.1..(a+1)*self.shape.1, b*self.shape.1..(b+1)*self.shape.1);
+        self.row_swap_checked(a, b).unwrap();
     }
 
-    pub fn col_add(&mut self, source: usize, target: usize) {
+    pub fn col_add_checked(&mut self, source: usize, target: usize) -> Result<(), IndexError> {
+        validate_index!(source < self.shape.1, col source, self.shape, col_add);
+        validate_index!(target < self.shape.1, col target, self.shape, col_add);
         for j in 0..self.shape.0 {
             let value = self[(j, source)];
             self[(j, target)] += value;
         }
+        Ok(())
     }
 
-    pub fn col_swap(&mut self, a: usize, b: usize) {
+    pub fn col_add(&mut self, source: usize, target: usize) {
+        self.col_add_checked(source, target).unwrap();
+    }
+
+    pub fn col_swap_checked(&mut self, a: usize, b: usize) -> Result<(), IndexError> {
+        validate_index!(a < self.shape.1, col a, self.shape, col_swap);
+        validate_index!(b < self.shape.1, col b, self.shape, col_swap);
         for j in 0..self.shape.0 {
             let a_val = self[(j, a)];
             let b_val = self[(j, b)];
             self[(j, a)] = b_val;
             self[(j, b)] = a_val;
         }
+        Ok(())
+    }
+
+    pub fn col_swap(&mut self, a: usize, b: usize) {
+        self.col_swap_checked(a, b).unwrap();
     }
 }

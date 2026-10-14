@@ -141,8 +141,8 @@ pub struct FullRankSymmetricDecomposition {
 }
 
 impl Matrix {
-    pub fn full_rank_symmetric_decomposition(&self) -> FullRankSymmetricDecomposition {
-        assert!(&self.transpose() == self, "matrix must be symmetric");
+    pub fn full_rank_symmetric_decomposition_checked(&self) -> Result<FullRankSymmetricDecomposition, InvalidInputError> {
+        validate_input!(self.is_symmetric(), "matrix must be symmetric" in full_rank_symmetric_decomposition);
         let n = self.shape.0;
 
         let mut m = Matrix::eye(n);
@@ -157,7 +157,11 @@ impl Matrix {
             lam[(i, i)] = (0..n).map(|k| m[(i, k)] * m[(i, k)]).sum::<GF2>() + self[(i, i)];
         }
 
-        FullRankSymmetricDecomposition { lam, m }
+        Ok(FullRankSymmetricDecomposition { lam, m })
+    }
+
+    pub fn full_rank_symmetric_decomposition(&self) -> FullRankSymmetricDecomposition {
+        self.full_rank_symmetric_decomposition_checked().unwrap()
     }
 }
 
@@ -178,9 +182,9 @@ fn frsd_roundtrip() {
 }
 
 /// For symmetric A, decompose A = MRM^T where M is invertible and R is block-diagonal. 
-/// Each block is either [1], [[0,1],[1,0]] or [0], organized in this order.
+/// Each block is either \[1\], \[\[0,1\],\[1,0\]\] or \[0\], organized in this order.
 /// num_i and num_h, respectively, indicate that the first num_i and next num_h 
-/// blocks are [1] or [[0,1],[1,0]], respectively.
+/// blocks are \[1\] or \[\[0,1],\[1,0\]\], respectively.
 #[derive(Debug, Clone)]
 pub struct WittDecomposition {
     pub r: Matrix,
@@ -199,8 +203,8 @@ impl WittDecomposition {
 }
 
 impl Matrix {
-    pub fn witt_decomposition(&self) -> WittDecomposition {
-        assert!(&self.transpose() == self, "matrix must be symmetric");
+    pub fn witt_decomposition_checked(&self) -> Result<WittDecomposition, InvalidInputError> {
+        validate_input!(self.is_symmetric(), "matrix must be symmetric" in witt_decomposition);
 
         let mut num_i = 0;
         let mut num_h = 0;
@@ -264,7 +268,11 @@ impl Matrix {
             }
         }
 
-        WittDecomposition { r, m, num_i, num_h }
+        Ok(WittDecomposition { r, m, num_i, num_h })
+    }
+
+    pub fn witt_decomposition(&self) -> WittDecomposition {
+        self.witt_decomposition_checked().unwrap()
     }
 }
 
@@ -292,12 +300,12 @@ pub struct SymmetricRankDecomposition {
 }
 
 impl Matrix {
-    pub fn symmetric_rank_decomposition(&self) -> SymmetricRankDecomposition {
+    pub fn symmetric_rank_decomposition_checked(&self) -> Result<SymmetricRankDecomposition, InvalidInputError> {
         if self.is_zeros() {
-            return SymmetricRankDecomposition { m: Matrix::zeros(self.num_rows(), 0) }
+            return Ok(SymmetricRankDecomposition { m: Matrix::zeros(self.num_rows(), 0) })
         }
 
-        let witt = self.witt_decomposition();
+        let witt = self.witt_decomposition_checked().map_err(|e| e.with_method("symmetric_rank_decomposition"))?;
         if witt.num_i == 0 {
             let m = witt.m.slice(.., ..2*witt.num_h);
             let mut a = Matrix::zeros(2*witt.num_h, 2*witt.num_h + 1);
@@ -309,7 +317,7 @@ impl Matrix {
                     a[(i, i + 1)] = GF2::ZERO;
                 }
             }
-            SymmetricRankDecomposition { m: m.dot(&a) }
+            Ok(SymmetricRankDecomposition { m: m.dot(&a) })
         } else {
             let m1 = witt.m.slice(.., ..witt.num_i-1);
             let m2 = witt.m.slice(.., witt.num_i-1..witt.num_i+2*witt.num_h);
@@ -322,8 +330,12 @@ impl Matrix {
                     a[(i, i)] = GF2::ZERO;
                 }
             }
-            SymmetricRankDecomposition { m: m1.hconcat(&m2.dot(&a)) }
+            Ok(SymmetricRankDecomposition { m: m1.hconcat(&m2.dot(&a)) })
         }
+    }
+
+    pub fn symmetric_rank_decomposition(&self) -> SymmetricRankDecomposition {
+        self.symmetric_rank_decomposition_checked().unwrap()
     }
 }
 
@@ -344,14 +356,14 @@ fn symmetric_rank_decomposition_roundtrip() {
 }
 
 /// Check if two symmetric matrices A and B are congruent, and return an invertible P such that PAP^T = B.
-pub fn check_congruence_symmetric(a: &Matrix, b: &Matrix) -> Option<Matrix> {
-    assert_eq!(a.shape, b.shape, "only equal-sized matrices can be compared for congruence");
+pub fn check_congruence_symmetric_checked(a: &Matrix, b: &Matrix) -> Result<Option<Matrix>, InvalidInputError> {
+    validate_input!(a.shape == b.shape, "the matrices have shapes {:?} and {:?} which are not equal" in check_congruence_symmetric, a.shape, b.shape);
 
-    let mut wa = a.witt_decomposition();
-    let mut wb = b.witt_decomposition();
+    let mut wa = a.witt_decomposition_checked()?;
+    let mut wb = b.witt_decomposition_checked()?;
 
     if wa.congruence_class() != wb.congruence_class() {
-        None
+        Ok(None)
     } else {
         // TODO: this duplicates logic from symmetric_rank_decomposition, refactor
         let m = if wa.num_i < wb.num_i { &mut wa.m } else { &mut wb.m }; 
@@ -361,8 +373,12 @@ pub fn check_congruence_symmetric(a: &Matrix, b: &Matrix) -> Option<Matrix> {
             m.col_add(i + 1, i);
             m.col_add(i - 1, i + 1);            
         }
-        Some(wb.m.dot(&wa.m.inverse().unwrap()))
+        Ok(Some(wb.m.dot(&wa.m.inverse().unwrap())))
     }
+}
+
+pub fn check_congruence_symmetric(a: &Matrix, b: &Matrix) -> Option<Matrix> {
+    check_congruence_symmetric_checked(a, b).unwrap()
 }
 
 #[test]
@@ -446,9 +462,9 @@ impl CanonicalQuadraticForm {
 
 impl Matrix {
     /// Solve the quadratic equation x^T A x = y for x != 0
-    pub fn solve_quadratic(&self, y: GF2) -> Option<Matrix> {
-        assert!(self.is_square(), "cannot interpret non-square matrix as quadratic form");
-        if y == GF2::ONE {
+    pub fn solve_quadratic_checked(&self, y: GF2) -> Result<Option<Matrix>, InvalidInputError> {
+        validate_input!(self.is_square(), "cannot interpret non-square matrix as quadratic form" in solve_quadratic);
+        Ok(if y == GF2::ONE {
             if let Some(i) = (0..self.num_rows()).find(|&i| self[(i, i)] == GF2::ONE) {
                 Some(Matrix::col_vector(i, self.num_rows()))
             } else if let Some((i, j)) = (0..self.num_rows()).flat_map(|i| {
@@ -476,11 +492,15 @@ impl Matrix {
             } else {
                 None
             }
-        }
+        })
     }
 
-    pub fn canonical_quadratic_form(&self) -> CanonicalQuadraticForm {
-        assert!(self.is_square(), "cannot interpret non-square matrix as quadratic form");
+    pub fn solve_quadratic(&self, y: GF2) -> Option<Matrix> {
+        self.solve_quadratic_checked(y).unwrap()
+    }
+
+    pub fn canonical_quadratic_form_checked(&self) -> Result<CanonicalQuadraticForm, InvalidInputError> {
+        validate_input!(self.is_square(), "cannot interpret non-square matrix as quadratic form" in canonical_quadratic_form);
 
         let n = self.num_rows();
         let mut f = CanonicalQuadraticForm {
@@ -581,7 +601,11 @@ impl Matrix {
             f.arf = false;
         }
 
-        f
+        Ok(f)
+    }
+
+    pub fn canonical_quadratic_form(&self) -> CanonicalQuadraticForm {
+        self.canonical_quadratic_form_checked().unwrap()
     }
 }
 
@@ -720,12 +744,12 @@ pub struct KrylovSubspace {
 }
 
 impl Matrix {
-    fn krylov_subspace_ext(&self, vec: &Matrix) -> (Matrix, Poly, usize, LinearSpace)  {
-        assert_eq!(self.shape.0, self.shape.1, "cannot find krylov subspace of non-square matrix");
-        assert!(vec.shape.0 == self.shape.0 && vec.shape.1 == 1, "input to krylov subspace must be a compatible column vector");
+    fn krylov_subspace_ext(&self, vec: &Matrix) -> Result<(Matrix, Poly, usize, LinearSpace), InvalidInputError>  {
+        validate_input!(self.is_square(), "cannot find krylov subspace of non-square matrix" in krylov_subspace);
+        validate_input!(vec.shape.0 == self.shape.0 && vec.shape.1 == 1, "shape {:?} is not compatible with shape {:?}" in krylov_subspace, vec.shape, self.shape);
 
         if vec.is_zeros() {
-            return (Matrix::zeros(0, vec.num_rows()), Poly::one(), 0, LinearSpace::empty(vec.num_rows()))
+            return Ok((Matrix::zeros(0, vec.num_rows()), Poly::one(), 0, LinearSpace::empty(vec.num_rows())))
         }
 
         let mut lsp = LinearSpace::new(vec.transpose());
@@ -745,19 +769,29 @@ impl Matrix {
         ext.row_reduce_ext(false, &mut coeffs);
         let min_poly = Poly::new(coeffs.row(coeffs.num_rows() - 1).iter().chain([GF2::ONE]));
 
-        (vecs, min_poly, rank, lsp)
+        Ok((vecs, min_poly, rank, lsp))
+    }
+
+    pub fn minimal_polynomial_of_checked(&self, vec: &Matrix) -> Result<Poly, InvalidInputError> {
+        self.krylov_subspace_ext(vec)
+            .map_err(|e| e.with_method("minimal_polynomial_of"))
+            .map(|s| s.1)
     }
 
     pub fn minimal_polynomial_of(&self, vec: &Matrix) -> Poly {
-        self.krylov_subspace_ext(vec).1
+        self.minimal_polynomial_of_checked(vec).unwrap()
     }
 
-    pub fn krylov_subspace(&self, vec: &Matrix) -> KrylovSubspace {
-        let (vecs, min_poly, rank, lsp) = self.krylov_subspace_ext(vec);
+    pub fn krylov_subspace_checked(&self, vec: &Matrix) -> Result<KrylovSubspace, InvalidInputError> {
+        let (vecs, min_poly, rank, lsp) = self.krylov_subspace_ext(vec)?;
         let bch = vecs.vconcat(&lsp.complement().basis()).transpose();
         let ibch = bch.inverse().unwrap();
         let action = ibch.dot(self).dot(&bch);
-        KrylovSubspace { action, basis: bch, dual_basis: ibch, rank, min_poly }
+        Ok(KrylovSubspace { action, basis: bch, dual_basis: ibch, rank, min_poly })
+    }
+
+    pub fn krylov_subspace(&self, vec: &Matrix) -> KrylovSubspace {
+        self.krylov_subspace_checked(vec).unwrap()
     }
 }
 
@@ -822,17 +856,17 @@ impl Matrix {
         v2 + w2
     }
 
-    pub fn maximal_vector(&self) -> Matrix {
-        assert_eq!(self.shape.0, self.shape.1, "cannot find maximal vector of non-square matrix");
+    pub fn maximal_vector_checked(&self) -> Result<Matrix, InvalidInputError> {
+        validate_input!(self.is_square(), "matrix should be square, but has shape {:?}" in maximal_vector, self.shape);
         let n = self.shape.0;
 
-        let mut e = Matrix::basis_vector(n, 0);
+        let mut e = Matrix::col_vector(0, n);
         let mut p = self.minimal_polynomial_of(&e);
         let mut base_idx = 0;
         let mut l = Vec::new();
         for i in 1..n {
             if p.degree() == n { break; }
-            e = Matrix::basis_vector(n, i);
+            e = Matrix::col_vector(i, n);
             let pe = self.minimal_polynomial_of(&e);
             let pp = p.lcm(&pe);
             if pp == pe {
@@ -846,21 +880,30 @@ impl Matrix {
             p = pp;
         }
 
-        let mut z = Matrix::basis_vector(n, base_idx);
+        let mut z = Matrix::col_vector(base_idx, n);
         for (i, mu_z, mu_e) in l {
-            let e = Matrix::basis_vector(n, i);
+            let e = Matrix::col_vector(i, n);
             z = self.lcm_poly_vector(&z, &mu_z, &e, &mu_e);
         }
-        z
+        Ok(z)
+    }
+
+    pub fn maximal_vector(&self) -> Matrix {
+        self.maximal_vector_checked().unwrap()
+    }
+
+    pub fn minimal_polynomial_checked(&self) -> Result<Poly, InvalidInputError> {
+        let maxvec = self.maximal_vector_checked().map_err(|e| e.with_method("minimal_polynomial"))?;
+        Ok(self.minimal_polynomial_of(&maxvec))
     }
 
     pub fn minimal_polynomial(&self) -> Poly {
-        self.minimal_polynomial_of(&self.maximal_vector())
+        self.minimal_polynomial_checked().unwrap()
     }
 
     fn jacob_complement(&self, d: usize) -> (Matrix, Matrix) {
         let n = self.shape.0;
-        let mut rows = vec![Matrix::basis_vector(n, d - 1).transpose()];
+        let mut rows = vec![Matrix::row_vector(d - 1, n)];
         for _ in 1..d {
             rows.push(rows[rows.len() - 1].dot(self));
         }
@@ -880,8 +923,8 @@ impl Matrix {
         (bch_total, ibch_total, sp.rank, sp.min_poly)
     }
 
-    pub fn rational_canonical_form(&self) -> RationalCanonicalForm {
-        assert_eq!(self.shape.0, self.shape.1, "cannot find rational canonical form of non-square matrix");
+    pub fn rational_canonical_form_checked(&self) -> Result<RationalCanonicalForm, InvalidInputError> {
+        validate_input!(self.is_square(), "cannot find rational canonical form of non-square matrix with shape {:?}" in rational_canonical_form, self.shape);
         let n = self.shape.0;
         let mut t = self.clone();
         let mut total_k = 0;
@@ -915,7 +958,11 @@ impl Matrix {
             .collect::<Vec<_>>());
         assert!((&normal_form * &mask) == normal_form);
      
-        RationalCanonicalForm { normal_form, basis: bch, dual_basis: ibch, indices, invariant_factors }
+        Ok(RationalCanonicalForm { normal_form, basis: bch, dual_basis: ibch, indices, invariant_factors })
+    }
+
+    pub fn rational_canonical_form(&self) -> RationalCanonicalForm {
+        self.rational_canonical_form_checked().unwrap()
     }
 }
 
@@ -963,7 +1010,7 @@ impl RationalCanonicalForm {
 
 impl Matrix {
     fn krylov_block_reduce(&self, vec: &Matrix) -> (Poly, Matrix) {
-        let (_, min_poly, _, lsp) = self.krylov_subspace_ext(vec);
+        let (_, min_poly, _, lsp) = self.krylov_subspace_ext(vec).unwrap();
         let (mut pivots, rank) = lsp.basis().pivot_cols();
         pivots[rank..].reverse();
         let mut rest = self.slice(.., &pivots[rank..]).transpose();
@@ -972,20 +1019,24 @@ impl Matrix {
         (min_poly, reduced)
     }
 
-    pub fn characteristic_polynomial(&self) -> Poly {
-        assert!(self.is_square(), "cannot calculate characteristic polynomial of non-square matrix");
+    pub fn characteristic_polynomial_checked(&self) -> Result<Poly, InvalidInputError> {
+        validate_input!(self.is_square(), "cannot calculate characteristic polynomial of non-square matrix" in characteristic_polynomial);
 
         if self.num_rows() == 0 {
-            return Poly::one()
+            return Ok(Poly::one())
         } else if self.is_zeros() {
-            return Poly::monom(self.num_rows())
+            return Ok(Poly::monom(self.num_rows()))
         } else if self.is_identity() {
-            return Poly::from_terms([0, 1]).pow(self.num_rows())
+            return Ok(Poly::from_terms([0, 1]).pow(self.num_rows()))
         }
 
         let vec = Matrix::col_vector(0, self.num_rows());
         let (poly, reduced) = self.krylov_block_reduce(&vec);
-        return poly * reduced.characteristic_polynomial()
+        Ok(poly * reduced.characteristic_polynomial_checked()?)
+    }
+
+    pub fn characteristic_polynomial(&self) -> Poly {
+        self.characteristic_polynomial_checked().unwrap()
     }
 }
 
@@ -1064,7 +1115,7 @@ impl RationalCanonicalForm {
                 indices.push(indices[indices.len() - 1] + irred.degree() * pow);
 
                 let compl = f.quot(&irred.pow(pow));
-                let v = block.eval_poly(&compl, &Matrix::basis_vector(block.num_rows(), 0));
+                let v = block.eval_poly(&compl, &Matrix::col_vector(0, block.num_rows()));
                 for j in 0..pow {
                     let mut u = block.eval_poly(&irred.pow(j), &v);
                     for _ in 0..irred.degree() {
@@ -1096,8 +1147,12 @@ impl RationalCanonicalForm {
 }
 
 impl Matrix {
+    pub fn generalized_jordan_form_checked(&self) -> Result<GeneralizedJordanForm, InvalidInputError> {
+        Ok(self.rational_canonical_form_checked()?.generalized_jordan_form())
+    }
+
     pub fn generalized_jordan_form(&self) -> GeneralizedJordanForm {
-        self.rational_canonical_form().generalized_jordan_form()
+        self.generalized_jordan_form_checked().unwrap()
     }
 }
 
@@ -1149,16 +1204,16 @@ pub struct TransvectionDecomposition {
 }
 
 impl Matrix {
-    pub fn transvection_decomposition(&self) -> TransvectionDecomposition {
-        assert!(self.is_invertible(), "cannot find transvection decomposition of non-invertible matrix");
+    pub fn transvection_decomposition_checked(&self) -> Result<TransvectionDecomposition, InvalidInputError> {
+        validate_input!(self.is_invertible(), "matrix should be invertible" in transvection_decomposition);
         
         let n = self.num_rows();
         if self.is_identity() {
-            return TransvectionDecomposition { 
+            return Ok(TransvectionDecomposition { 
                 u: Matrix::zeros(n, 0),
                 v: Matrix::zeros(n, 0),
                 b: Matrix::zeros(0, 0)
-            }
+            })
         }
 
         let mut a = self.clone();
@@ -1187,7 +1242,11 @@ impl Matrix {
         let gram = v.transpose().dot(&u);
         let b = (gram.triu() + Matrix::eye(gram.num_rows())).inverse().unwrap();
 
-        TransvectionDecomposition { u, v, b }
+        Ok(TransvectionDecomposition { u, v, b })
+    }
+
+    pub fn transvection_decomposition(&self) -> TransvectionDecomposition {
+        self.transvection_decomposition_checked().unwrap()
     }
 }
 
