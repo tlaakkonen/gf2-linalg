@@ -1,0 +1,5 @@
+.*::new
+.*_checked
+Matrix::(slice|from_rows|from_data|iter)
+Matrix::(row|col)_reduce_ext
+(Index|Slice|ShapeMismatch|InvalidInput)Error
