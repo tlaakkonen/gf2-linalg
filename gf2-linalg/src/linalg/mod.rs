@@ -364,8 +364,35 @@ impl Matrix {
         Ok(Some(sol))
     }
 
-    fn solve_triangular(&self, lower: bool, rhs: &Matrix) -> Option<Matrix> {
+    pub fn solve_triangular(&self, lower: bool, rhs: &Matrix) -> Option<Matrix> {
         self.solve_triangular_checked(lower, rhs).unwrap()
+    }
+
+    pub fn pow_checked(&self, pow: isize) -> Result<Matrix, InvalidInputError> {
+        validate_input!(self.is_square(), "matrix must be square" in pow);
+
+        let (mut mult, mut pow) = if pow < 0 {
+            let inv = self.inverse();
+            validate_input!(inv.is_some(), "cannot take negative power of non-invertible matrix" in pow);
+            (inv.unwrap(), -pow)
+        } else {
+            (self.clone(), pow)
+        };
+
+        let mut out = Matrix::eye(self.num_rows());
+        while pow != 0 {
+            if pow & 1 != 0 {
+                out = out.dot(&mult);
+            }
+            mult = mult.dot(&mult);
+            pow >>= 1;
+        }
+
+        Ok(out)
+    }
+
+    pub fn pow(&self, pow: isize) -> Matrix {
+        self.pow_checked(pow).unwrap()
     }
 }
 
@@ -458,5 +485,31 @@ fn solve_triangular_lower_invertible() {
         }
         let rhs = Matrix::random(&mut rng, 10, 5);
         assert_eq!(mat.solve(&rhs), mat.solve_triangular(true, &rhs));
+    }
+}
+
+#[test]
+fn pow_inv_match_naive()  {
+    use rand::{RngExt, SeedableRng};
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let mat = Matrix::random_invertible(&mut rng, 10);
+        let pow = rng.random_range(-10i32..=-10) as isize;
+        let naive = if pow < 0 {
+            let inv = mat.inverse().unwrap();
+            let mut out = Matrix::eye(10);
+            for _ in 0..-pow {
+                out = out.dot(&inv);
+            }
+            out
+        } else {
+            let mut out = Matrix::eye(10);
+            for _ in 0..pow {
+                out = out.dot(&mat);
+            }
+            out
+        };
+        let fast = mat.pow(pow);
+        assert_eq!(naive, fast);
     }
 }

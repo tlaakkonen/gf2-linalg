@@ -14,7 +14,7 @@ impl InvalidInputError {
 
 impl std::fmt::Display for InvalidInputError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "input for method `{}` is not valid: {}", self.method, self.message)
+        write!(f, "input for `{}` is not valid: {}", self.method, self.message)
     }
 }
 
@@ -93,8 +93,8 @@ pub(crate) enum IndexErrorKind {
 impl std::fmt::Display for IndexError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.kind {
-            IndexErrorKind::Row(row) => write!(f, "in `{}: row {} is out of bounds for matrix of shape {:?}", self.method, row, self.shape),
-            IndexErrorKind::Col(col) => write!(f, "in `{}: col {} is out of bounds for matrix of shape {:?}", self.method, col, self.shape)
+            IndexErrorKind::Row(row) => write!(f, "in `{}`: row {} is out of bounds for matrix of shape {:?}", self.method, row, self.shape),
+            IndexErrorKind::Col(col) => write!(f, "in `{}`: col {} is out of bounds for matrix of shape {:?}", self.method, col, self.shape)
         }
     }
 }

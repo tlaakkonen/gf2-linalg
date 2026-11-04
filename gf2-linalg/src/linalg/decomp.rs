@@ -2,35 +2,35 @@ use crate::LinearSpace;
 
 use super::*;
 
-/// Decompose A = P.T @ L @ U
+/// Decompose A = P @ L @ U
 /// P is a permutation matrix, L is lower triangular, U is upper triangular
 #[derive(Debug, Clone)]
 pub struct PLUDecomposition {
-    pub pt: Matrix,
+    pub p: Matrix,
     pub l: Matrix,
     pub u: Matrix
 }
 
 impl Matrix {
     pub fn plu_decomposition(&self) -> PLUDecomposition {        
-        struct PLURec { pt: Matrix, l: Matrix }
+        struct PLURec { p: Matrix, l: Matrix }
         impl GaussRecorder for &mut PLURec {
             fn row_add(&mut self, source: usize, target: usize) {
                 self.l[(target, source)] = GF2::ONE;
             }
 
             fn row_swap(&mut self, a: usize, b: usize) {
-                self.pt.row_swap(a, b);
+                self.p.col_swap(a, b);
                 self.l.row_swap(a, b);
             }
         }
 
         let mut mat = self.clone();
-        let mut rec = PLURec { pt: Matrix::eye(mat.shape.0), l: Matrix::zeros(mat.shape.0, mat.shape.0) };
+        let mut rec = PLURec { p: Matrix::eye(mat.shape.0), l: Matrix::zeros(mat.shape.0, mat.shape.0) };
         mat.row_reduce_ext(false, &mut rec);
         rec.l += Matrix::eye(mat.shape.0);
 
-        PLUDecomposition { pt: rec.pt, l: rec.l, u: mat }
+        PLUDecomposition { p: rec.p, l: rec.l, u: mat }
     }
 }
 
@@ -41,13 +41,13 @@ fn plu_decomp_roundtrip() {
     for _ in 0..1000 {
         let mat = Matrix::random(&mut rng, 10, 10);
         let plu = mat.plu_decomposition();
-        assert_eq!(plu.pt.transpose().dot(&plu.l).dot(&plu.u), mat);
+        assert_eq!(plu.p.dot(&plu.l).dot(&plu.u), mat);
     }
 }
 
 impl PLUDecomposition {
     pub fn solve(&self, rhs: &Matrix) -> Option<Matrix> {
-        let pb = self.pt.dot(rhs);
+        let pb = self.p.transpose().dot(rhs);
         let y = self.l.solve_triangular(true, &pb)?;
         self.u.solve_triangular(false, &y)
     }
@@ -662,22 +662,22 @@ fn quad_form_equivalence_invariants() {
 /// For a matrix A, find invertible E, P, and nilpotent N such that A = P(E \oplus N)P^-1.
 #[derive(Debug, Clone)]
 pub struct FittingDecomposition {
-    pub invertible_part: Matrix,
-    pub nilpotent_part: Matrix,
-    pub basis: Matrix,
-    pub dual_basis: Matrix
+    pub invertible: Matrix,
+    pub nilpotent: Matrix,
+    pub basis: Matrix
 }
 
 impl FittingDecomposition {
     pub fn drazin_inverse(&self) -> Matrix {
-        self.basis.slice(.., ..self.invertible_part.num_rows())
-            .dot(&self.invertible_part.inverse().unwrap())
-            .dot(&self.dual_basis.slice(..self.invertible_part.num_rows(), ..))
+        self.basis.slice(.., ..self.invertible.num_rows())
+            .dot(&self.invertible.inverse().unwrap())
+            .dot(&self.basis.inverse().unwrap().slice(..self.invertible.num_rows(), ..))
     }
 }
 
 impl Matrix {
-    pub fn fitting_decomposition(&self) -> FittingDecomposition {
+    pub fn fitting_decomposition_checked(&self) -> Result<FittingDecomposition, InvalidInputError> {
+        validate_input!(self.is_square(), "matrix must be square" in fitting_decomposition);
         let mut q = self.clone();
         let mut r = q.rank();
         loop {
@@ -699,11 +699,20 @@ impl Matrix {
         let invertible_part = form.slice(..r, ..r);
         let nilpotent_part = form.slice(r.., r..);
 
-        FittingDecomposition { invertible_part, nilpotent_part, basis, dual_basis }
+        Ok(FittingDecomposition { invertible: invertible_part, nilpotent: nilpotent_part, basis })
+    }
+
+    pub fn fitting_decomposition(&self) -> FittingDecomposition {
+        self.fitting_decomposition_checked().unwrap()
+    }
+
+    pub fn drazin_inverse_checked(&self) -> Result<Matrix, InvalidInputError> {
+        validate_input!(self.is_square(), "matrix must be square" in drazin_inverse);
+        Ok(self.fitting_decomposition().drazin_inverse())
     }
 
     pub fn drazin_inverse(&self) -> Matrix {
-        self.fitting_decomposition().drazin_inverse()
+        self.drazin_inverse_checked().unwrap()
     }
 }
 
@@ -714,8 +723,8 @@ fn fitting_decomposition_roundtrip() {
     for _ in 0..1000 {
         let mat = Matrix::random(&mut rng, 10, 10);
         let fd = mat.fitting_decomposition();
-        assert_eq!(fd.basis.dot(&Matrix::block_diagonal(&[&fd.invertible_part, &fd.nilpotent_part])).dot(&fd.dual_basis), mat);
-        assert_eq!(fd.invertible_part.determinant(), GF2::ONE);
+        assert_eq!(fd.basis.dot(&Matrix::block_diagonal(&[&fd.invertible, &fd.nilpotent])).dot(&fd.basis.inverse().unwrap()), mat);
+        assert_eq!(fd.invertible.determinant(), GF2::ONE);
     }
 }
 

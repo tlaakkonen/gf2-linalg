@@ -793,7 +793,7 @@ impl IndexMut<(usize, usize)> for Matrix {
 }
 
 impl Matrix {
-    fn add_checked(&self, rhs: &Matrix) -> Result<Matrix, ShapeMismatchError> {
+    pub fn add_checked(&self, rhs: &Matrix) -> Result<Matrix, ShapeMismatchError> {
         validate_shape!(
             self.shape == rhs.shape,
             self.shape, rhs.shape, add
@@ -801,7 +801,7 @@ impl Matrix {
         Ok(Matrix { inner: self.inner.add(&rhs.inner), shape: self.shape })
     }
 
-    fn add_assign_checked(&mut self, rhs: &Matrix) -> Result<(), ShapeMismatchError> {
+    pub fn add_assign_checked(&mut self, rhs: &Matrix) -> Result<(), ShapeMismatchError> {
         validate_shape!(
             self.shape == rhs.shape,
             self.shape, rhs.shape, add_assign
@@ -810,7 +810,7 @@ impl Matrix {
         Ok(())
     }
 
-    fn mul_checked(&self, rhs: &Matrix) -> Result<Matrix, ShapeMismatchError> {
+    pub fn mul_checked(&self, rhs: &Matrix) -> Result<Matrix, ShapeMismatchError> {
         validate_shape!(
             self.shape == rhs.shape,
             self.shape, rhs.shape, mul
@@ -818,7 +818,7 @@ impl Matrix {
         Ok(Matrix { inner: self.inner.mul(&rhs.inner), shape: self.shape })
     }
 
-    fn mul_assign_checked(&mut self, rhs: &Matrix) -> Result<(), ShapeMismatchError>{
+    pub fn mul_assign_checked(&mut self, rhs: &Matrix) -> Result<(), ShapeMismatchError>{
         validate_shape!(
             self.shape == rhs.shape,
             self.shape, rhs.shape, mul_assign
