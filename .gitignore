@@ -1,3 +1,4 @@
 /target
+gf2-linalg/examples/test.rs
 /.vscode
 Cargo.lock
