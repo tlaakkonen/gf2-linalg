@@ -1,7 +1,9 @@
 mod elem;
 mod matrix;
 mod linalg;
-use {elem::*, matrix::*, linalg::*};
+mod poly;
+mod space;
+use {elem::*, matrix::*, linalg::*, poly::*, space::*};
 
 use pyo3::{create_exception, exceptions::{PyValueError, PyIndexError}, prelude::*};
 use gf2_linalg as gf2;
@@ -94,10 +96,11 @@ mod rng {
 mod python_bindings {
     #[pymodule_export]
     use super::{
-        GF2, Matrix, GaussRecorder, 
-        PLUDecomposition, RankDecomposition, 
+        GF2, Matrix, Poly, LinearSpace,
+        GaussRecorder, PLUDecomposition, RankDecomposition, 
         FullRankSymmetricDecomposition, SymmetricRankDecomposition, 
         WittDecomposition, check_congruence_symmetric,
-        CanonicalQuadraticForm, FittingDecomposition, TransvectionDecomposition
+        CanonicalQuadraticForm, FittingDecomposition, TransvectionDecomposition,
+        KrylovSubspace, RationalCanonicalForm, GeneralizedJordanForm
     };
 }

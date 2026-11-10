@@ -2,4 +2,5 @@
 .*_checked
 Matrix::(slice|from_rows|from_data|iter)
 Matrix::(row|col)_reduce_ext
+Poly::(one|factor_with_multiplicities|pow_mod_signed|pow_mod|square|pow2k)
 (Index|Slice|ShapeMismatch|InvalidInput)Error

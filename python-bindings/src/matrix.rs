@@ -1,10 +1,11 @@
 use pyo3::{
     IntoPyObjectExt, PyTypeInfo, exceptions::{PyIndexError, PyTypeError, PyValueError}, intern, prelude::*, types::{PyBytes, PyDict, PyInt, PySlice}
 };
-use crate::{GF2, InvalidInputError, ShapeMismatchError, index_to_indexerror, rng::with_rng, slice_to_indexerror};
+use crate::{GF2, InvalidInputError, ShapeMismatchError, index_to_indexerror, linalg::FromInner, rng::with_rng, slice_to_indexerror, LinearSpace};
 use gf2_linalg as gf2;
 
-#[pyclass(module = "gf2_linalg")]
+#[pyclass(eq, module = "gf2_linalg")]
+#[derive(PartialEq, Eq)]
 pub(crate) struct Matrix(pub(crate) gf2::Matrix);
 
 impl Matrix {
@@ -286,6 +287,14 @@ impl Matrix {
         self.0.vector_dot_checked(&other.0).map(GF2).map_err(ShapeMismatchError::from_inner)
     }
 
+    fn row_space(&self) -> LinearSpace {
+        LinearSpace(self.0.row_space())
+    }
+
+    fn col_space(&self) -> LinearSpace {
+        LinearSpace(self.0.col_space())
+    }
+
     #[pyo3(signature = (dtype = None, copy = None))]
     fn __array__<'py>(&self, py: Python<'py>, dtype: Option<&Bound<'py, PyAny>>, copy: Option<bool>) -> PyResult<Bound<'py, PyAny>> {
         if copy == Some(false) {
@@ -313,10 +322,6 @@ impl Matrix {
 
     pub(crate) fn __str__(&self) -> String {
         self.repr_with_prefix("[", "]")
-    }
-
-    fn __eq__(&self, other: &Matrix) -> bool {
-        self.0 == other.0
     }
 
     fn __getnewargs__(&self) -> ((),) { ((),) }
@@ -502,11 +507,12 @@ impl Matrix {
     }
 }
 
-impl Matrix {
-    pub(crate) fn from_inner(matrix: gf2::Matrix) -> Self {
-        Matrix(matrix)
-    }
+impl FromInner for Matrix {
+    type Inner = gf2::Matrix;
+    fn from_inner(inner: Self::Inner) -> Self { Self(inner) }
+}
 
+impl Matrix {
     fn normalize_col_index(&self, i: i64) -> PyResult<usize> {
         if i >= 0 {
             Ok(i as usize)
@@ -528,7 +534,7 @@ impl Matrix {
     }
 }
 
-impl std::fmt::Display for Matrix {
+impl std::fmt::Debug for Matrix {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.__str__())
     }

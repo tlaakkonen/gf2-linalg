@@ -1,7 +1,6 @@
 use pyo3::{exceptions::PyTypeError, intern, prelude::*};
 use gf2_linalg as gf2;
-use crate::{InvalidInputError, Matrix, ShapeMismatchError, elem::GF2, index_to_indexerror};
-use concat_idents::concat_idents;
+use crate::{InvalidInputError, Matrix, ShapeMismatchError, GF2, index_to_indexerror, Poly};
 
 #[pyclass(subclass)]
 pub(crate) struct GaussRecorder;
@@ -282,67 +281,70 @@ impl Matrix {
     }
 }
 
-macro_rules! decomp_struct_getter {
-    ($name:ident; #[unwrapped] $fname:ident : $fty:ty) => {
-        pub(super) fn $fname(slf: &$name) -> $fty {
-            slf.0.$fname.clone()
-        }
-    };
-    ($name:ident; $fname:ident : $fty:ty) => {
-        pub(super) fn $fname(slf: &$name) -> $fty {
-            <$fty>::from_inner(slf.0.$fname.clone())
-        }
+pub trait FromInner {
+    type Inner;
+    fn from_inner(inner: Self::Inner) -> Self;
+}
+
+impl<A: FromInner> FromInner for Vec<A> {
+    type Inner = Vec<A::Inner>;
+    fn from_inner(inner: Self::Inner) -> Self {
+        inner.into_iter().map(A::from_inner).collect()
     }
+}
+
+impl<A: FromInner, B: FromInner> FromInner for (A, B) {
+    type Inner = (A::Inner, B::Inner);
+    fn from_inner(inner: Self::Inner) -> Self {
+        (A::from_inner(inner.0), B::from_inner(inner.1))
+    }
+}
+
+impl FromInner for usize {
+    type Inner = usize;
+    fn from_inner(inner: Self::Inner) -> Self { inner }
+}
+
+impl FromInner for bool {
+    type Inner = bool;
+    fn from_inner(inner: Self::Inner) -> Self { inner }
 }
 
 macro_rules! decomp_struct {
     { 
         struct $name:ident($inner:ty) {
-            $($(#[$fmeta:tt])? $fname:ident : $fty:ty),*
+            $($fname:ident : $fty:ty),*
         }
     } => {
         #[pyclass]
         pub(crate) struct $name ($inner);
 
-        concat_idents!(mod_name = inner_, $name {
-            #[allow(non_snake_case)]
-            mod mod_name {
-                use super::*;
+        #[pymethods]
+        impl $name {
+            $(
+                #[getter]
+                fn $fname(&self) -> $fty {
+                    <$fty>::from_inner(self.0.$fname.clone())
+                }
+            )*
 
-                $(
-                    decomp_struct_getter!($name; $(#[$fmeta])? $fname : $fty);
-                )*
+            fn __repr__(&self) -> String {
+                let fvalues = [$(
+                    (stringify!($fname), format!("{:?}", self.$fname()))
+                ),*];
+                let formatted = format_multiline_repr(&fvalues);
+                format!("{}({})", stringify!($name), formatted)
             }
 
-            #[pymethods]
-            impl $name {
-                $(
-                    #[getter]
-                    fn $fname(&self) -> $fty {
-                        mod_name::$fname(self)
-                    }
-                )*
-
-                fn __repr__(&self) -> String {
-                    let fvalues = [$(
-                        (stringify!($fname), format!("{}", self.$fname()))
-                    ),*];
-                    let formatted = format_multiline_repr(&fvalues);
-                    format!("{}({})", stringify!($name), formatted)
-                }
-
-                fn __str__(&self) -> String {
-                    self.__repr__()
-                }
+            fn __str__(&self) -> String {
+                self.__repr__()
             }
+        }
 
-            impl $name {
-                #[allow(dead_code)]
-                pub(crate) fn from_inner(inner: $inner) -> Self {
-                    Self(inner)
-                }
-            }
-        });
+        impl FromInner for $name {
+            type Inner = $inner;
+            fn from_inner(inner: Self::Inner) -> Self { Self(inner) }
+        }
     }
 }
 
@@ -444,8 +446,8 @@ decomp_struct! {
     struct WittDecomposition(gf2::WittDecomposition) {
         r: Matrix,
         m: Matrix,
-        #[unwrapped] num_i: usize,
-        #[unwrapped] num_h: usize
+        num_i: usize,
+        num_h: usize
     }
 }
 
@@ -491,9 +493,9 @@ decomp_struct! {
         p: Matrix,
         k: Matrix,
         c: Matrix,
-        #[unwrapped] arf: bool,
-        #[unwrapped] rad: bool,
-        #[unwrapped] dim: usize
+        arf: bool,
+        rad: bool,
+        dim: usize
     }
 }
 
@@ -545,6 +547,107 @@ impl Matrix {
     fn drazin_inverse(&self) -> PyResult<Matrix> {
         self.0.drazin_inverse_checked()
             .map(Matrix).map_err(InvalidInputError::from_inner)
+    }
+}
+
+decomp_struct! {
+    struct KrylovSubspace(gf2::KrylovSubspace) {
+        action: Matrix,
+        basis: Matrix,
+        dual_basis: Matrix,
+        rank: usize,
+        min_poly: Poly
+    }
+}
+
+#[pymethods]
+impl Matrix {
+    fn krylov_subspace(&self, vec: &Matrix) -> PyResult<KrylovSubspace> {
+        self.0.krylov_subspace_checked(&vec.0)
+            .map_err(InvalidInputError::from_inner)
+            .map(KrylovSubspace::from_inner)
+    }
+
+    fn minimal_polynomial_of(&self, vec: &Matrix) -> PyResult<Poly> {
+        self.0.minimal_polynomial_of_checked(&vec.0)
+            .map_err(InvalidInputError::from_inner)
+            .map(Poly)
+    }
+}
+
+decomp_struct! {
+    struct RationalCanonicalForm(gf2::RationalCanonicalForm) {
+        normal_form: Matrix,
+        indices: Vec<usize>,
+        basis: Matrix,
+        dual_basis: Matrix,
+        invariant_factors: Vec<Poly>
+    }
+}
+
+#[pymethods]
+impl Matrix {
+    fn eval_poly(&self, p: &Poly, x: &Matrix) -> PyResult<Matrix> {
+        self.0.eval_poly_checked(&p.0, &x.0)
+            .map_err(ShapeMismatchError::from_inner)
+            .map(Matrix)
+    }
+
+    fn maximal_vector(&self) -> PyResult<Matrix> {
+        self.0.maximal_vector_checked()
+            .map_err(InvalidInputError::from_inner)
+            .map(Matrix)
+    }
+
+    fn minimal_polynomial(&self) -> PyResult<Poly> {
+        self.0.minimal_polynomial_checked()
+            .map_err(InvalidInputError::from_inner)
+            .map(Poly)
+    }
+
+    fn rational_canonical_form(&self) -> PyResult<RationalCanonicalForm> {
+        self.0.rational_canonical_form_checked()
+            .map_err(InvalidInputError::from_inner)
+            .map(RationalCanonicalForm::from_inner)
+    }
+
+    fn characteristic_polynomial(&self) -> PyResult<Poly> {
+        self.0.characteristic_polynomial_checked()
+            .map_err(InvalidInputError::from_inner)
+            .map(Poly)
+    }
+}
+
+#[pymethods]
+impl RationalCanonicalForm {
+    fn characteristic_polynomial(&self) -> Poly {
+        Poly(self.0.characteristic_polynomial())
+    }
+}
+
+decomp_struct! {
+    struct GeneralizedJordanForm(gf2::GeneralizedJordanForm) {
+        normal_form: Matrix,
+        indices: Vec<usize>,
+        basis: Matrix,
+        dual_basis: Matrix,
+        irreducible_factors: Vec<(Poly, usize)>
+    }
+}
+
+#[pymethods]
+impl RationalCanonicalForm {
+    fn generalized_jordan_form(&self) -> GeneralizedJordanForm {
+        GeneralizedJordanForm(self.0.generalized_jordan_form())
+    }
+}
+
+#[pymethods]
+impl Matrix {
+    fn generalized_jordan_form(&self) -> PyResult<GeneralizedJordanForm> {
+        self.0.generalized_jordan_form_checked()
+            .map_err(InvalidInputError::from_inner)
+            .map(GeneralizedJordanForm::from_inner)
     }
 }
 

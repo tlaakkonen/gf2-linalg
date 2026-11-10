@@ -23,6 +23,28 @@ I also have some explicit anti-goals:
 * **Other finite fields**: This crate focuses on the binary finite field, and the special structure that this affords. There is no plan to support arbitrary finite fields, consider the `galois` Python package if you need that.
 * **Objects except matrices and univariate polynomials**: I am not planning to support objects like polynomial rings, ideals, etc. Most of the operations on these objects can be phrased in terms of polynomials and matrices, so consider this if you want to work with these objects (or consider using SageMath instead). I am not currently planning to support multivariate polynomials, but I may reconsider.
 
+## Installation
+
+### Rust
+
+To use `gf2-linalg` in your Rust crate, add it to Cargo.toml:
+```toml
+[dependencies.gf2-linalg]
+git = "https://github.com/tlaakkonen/gf2-linalg.git"
+```
+
+There are two optional features, which are disabled by default: 
+* `rand`: enable the random matrix generation methods, adds a dependency on `rand`.
+* `ndarray`: enable methods to convert to/from `ndarray` arrays, adds a dependency on `ndarray`.
+
+### Python
+
+You can `pip install` directly from this repo:
+```bash
+pip install "git+https://github.com/tlaakkonen/gf2-linalg.git#subdirectory=python-bindings"
+```
+A Rust toolchain is required to build the package, and you may need to add the `--no-build-isolation` flag. YMMV but other package managers (`uv add` etc.) should accept the same syntax.
+
 ## Roadmap
 
 **General Features**
@@ -30,8 +52,6 @@ I also have some explicit anti-goals:
 Currently supported:
 * Linear subspaces with set-like operations
 * `ndarray` interface
-
-Planned:
 * Python bindings
 
 **Matrix Operations**

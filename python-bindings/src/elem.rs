@@ -4,7 +4,7 @@ use pyo3::{
 };
 use gf2_linalg as gf2;
 
-#[pyclass(module = "gf2_linalg")]
+#[pyclass(frozen, module = "gf2_linalg")]
 pub(crate) struct GF2(pub(crate) gf2::GF2);
 
 #[pymethods]
@@ -99,24 +99,16 @@ impl GF2 {
         }
     }
 
+    fn __radd__<'py>(&self, py: Python<'py>, other: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        self.__add__(py, other)
+    }
+
     fn __sub__<'py>(&self, py: Python<'py>, other: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
         self.__add__(py, other)
     }
 
-    fn __iadd__<'py>(&mut self, other: Bound<'py, PyAny>) -> PyResult<()> {
-        if let Ok(other) = other.cast::<Self>() {
-            self.0 += other.borrow().0;
-            Ok(())
-        } else if let Ok(other) = other.cast::<PyInt>() {
-            self.0 += GF2::new(other)?.0;
-            Ok(())
-        } else {
-            Err(PyTypeError::new_err("can only add GF2 or int to GF2"))
-        }
-    }
-
-    fn __isub__<'py>(&mut self, other: Bound<'py, PyAny>) -> PyResult<()> {
-        self.__iadd__(other)
+    fn __rsub__<'py>(&self, py: Python<'py>, other: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        self.__add__(py, other)
     }
 
     fn __mul__<'py>(&self, py: Python<'py>, other: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
@@ -129,15 +121,7 @@ impl GF2 {
         }
     }
 
-    fn __imul__<'py>(&mut self, other: Bound<'py, PyAny>) -> PyResult<()> {
-        if let Ok(other) = other.cast::<Self>() {
-            self.0 *= other.borrow().0;
-            Ok(())
-        } else if let Ok(other) = other.cast::<PyInt>() {
-            self.0 *= GF2::new(other)?.0;
-            Ok(())
-        } else {
-            Err(PyTypeError::new_err("can only multiply GF2 by GF2 or int"))
-        }
+    fn __rmul__<'py>(&self, py: Python<'py>, other: Bound<'py, PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        self.__mul__(py, other)
     }
 }

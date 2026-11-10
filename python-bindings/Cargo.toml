@@ -9,9 +9,6 @@ name = "gf2_linalg"
 crate-type = ["cdylib"]
 doc = false
 
-[dependencies]
-concat-idents = "1.1.5"
-
 [dependencies.pyo3]
 version = "0.29.0"
 features = ["experimental-inspect", "multiple-pymethods"]
