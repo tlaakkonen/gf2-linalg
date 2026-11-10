@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display};
 
-use crate::{GF2, Matrix, ShapeMismatchError, validate_shape};
+use crate::{GF2, InvalidInputError, Matrix, ShapeMismatchError, validate_shape};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct LinearSpace {
@@ -75,6 +75,10 @@ impl LinearSpace {
     }
 
     pub fn contains(&self, v: &Matrix) -> bool {
+        if self.ambient_dim() != v.num_cols() {
+            return false
+        }
+
         let mut v = v.clone();
         self.reduce(&mut v);
         v.is_zeros()
@@ -85,7 +89,9 @@ impl LinearSpace {
     }
 
     pub fn is_equal(&self, other: &LinearSpace) -> bool {
-        self.dim() == other.dim() && self.is_subset_of(other)
+        self.ambient_dim() == other.ambient_dim() 
+            && self.dim() == other.dim() 
+            && self.is_subset_of(other)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -114,10 +120,10 @@ impl LinearSpace {
         }
     }
 
-    pub fn push(&mut self, v: &Matrix) -> bool {
+    pub fn push_checked(&mut self, v: &Matrix) -> Result<bool, ShapeMismatchError> {
         let mut v = v.clone();
-        self.reduce(&mut v);
-        if v.is_zeros() { return false }
+        self.reduce_checked(&mut v)?;
+        if v.is_zeros() { return Ok(false) }
 
         v.row_reduce_ext(false, ());
         let (mut vpivots, vrank) = v.pivot_cols();
@@ -125,19 +131,31 @@ impl LinearSpace {
         self.basis = self.basis.vconcat(&v.slice(..vrank, ..));
         self.pivots.append(&mut vpivots);
         self.cycle_sort();
-        true
+        Ok(true)
     }
 
-    pub fn union(&self, other: &LinearSpace) -> LinearSpace {
+    pub fn push(&mut self, v: &Matrix) -> bool {
+        self.push_checked(v).unwrap()
+    }
+
+    pub fn union_checked(&self, other: &LinearSpace) -> Result<LinearSpace, ShapeMismatchError> {
         let mut new = self.clone();
-        new.push(&other.basis);
-        new
+        new.push_checked(&other.basis)?;
+        Ok(new)
     } 
 
-    pub fn intersect(&self, other: &LinearSpace) -> LinearSpace {
-        let nsp = self.basis.vconcat(&other.basis).left_null_space();
+    pub fn union(&self, other: &LinearSpace) -> LinearSpace {
+        self.union_checked(other).unwrap()
+    }
+
+    pub fn intersect_checked(&self, other: &LinearSpace) -> Result<LinearSpace, InvalidInputError> {
+        let nsp = Matrix::vstack_checked(&[&self.basis, &other.basis])?.left_null_space();
         let basis = nsp.slice(.., ..self.dim()).dot(&self.basis);
-        LinearSpace::new(basis)
+        Ok(LinearSpace::new(basis))
+    }
+
+    pub fn intersect(&self, other: &LinearSpace) -> LinearSpace {
+        self.intersect_checked(other).unwrap()
     }
 
     pub fn complement(&self) -> LinearSpace {

@@ -839,16 +839,20 @@ pub struct RationalCanonicalForm {
 }
 
 impl Matrix {
-    pub fn eval_poly(&self, p: &Poly, x: &Matrix) -> Matrix {
+    pub fn eval_poly_checked(&self, p: &Poly, x: &Matrix) -> Result<Matrix, ShapeMismatchError> {
         let mut total = Matrix::zeros_like(x);
         let mut z = x.clone();
         for coeff in p.coeffs() {
             if coeff == GF2::ONE {
-                total += &z;
+                total.add_assign_checked(&z)?;
             }
-            z = self.dot(&z);
+            z = self.dot_checked(&z)?;
         }
-        total
+        Ok(total)
+    }
+
+    pub fn eval_poly(&self, p: &Poly, x: &Matrix) -> Matrix {
+        self.eval_poly_checked(p, x).unwrap()
     }
 
     fn lcm_poly_vector(&self, v: &Matrix, mu_v: &Poly, w: &Matrix, mu_w: &Poly) -> Matrix {

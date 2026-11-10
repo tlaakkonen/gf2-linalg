@@ -96,9 +96,9 @@ impl Poly {
     }
 
     #[cfg(feature = "rand")]
-    pub fn random(rng: &mut impl rand::Rng, degree: usize) -> Poly {
+    pub fn random(rng: &mut impl rand::Rng, max_degree: usize) -> Poly {
         use rand::RngExt;
-        Poly::new((0..degree).map(|_| rng.random::<GF2>()))
+        Poly::new((0..max_degree+1).map(|_| rng.random::<GF2>()))
     }
 
     pub fn coeff(&self, term: usize) -> GF2 {
@@ -296,15 +296,20 @@ impl Poly {
     }
 
     /// For irreducible f, compute the trace of self in F2\[\[x\]\]/(f) over F2
-    pub fn trace_mod(&self, f: &Poly) -> GF2 {
-        let mut g = self.rem(f);
+    pub fn trace_mod_checked(&self, f: &Poly) -> Result<GF2, InvalidInputError> {
+        let mut g = self.rem_checked(f)?;
         let mut tr = g.eval(GF2::ZERO);
         for _ in 0..f.degree().saturating_sub(1) {
             g.square();
-            g = g.rem(f);
+            g = g.rem_checked(f)?;
             tr += g.eval(GF2::ZERO);
         }
-        tr
+        Ok(tr)
+    }
+
+    /// For irreducible f, compute the trace of self in F2\[\[x\]\]/(f) over F2
+    pub fn trace_mod(&self, f: &Poly) -> GF2 {
+        self.trace_mod_checked(f).unwrap()
     }
 
     pub fn square(&mut self) {
@@ -353,27 +358,42 @@ impl Poly {
         }
     }
 
-    pub fn pow_mod(&self, mut n: usize, m: &Poly) -> Poly {
+    pub fn pow_mod_checked(&self, mut n: usize, m: &Poly) -> Result<Poly, InvalidInputError> {
+        validate_input!(!m.is_zero(), "modulus should be non-zero" in pow_mod);
+
         let mut x = self.clone();
         let mut y = Poly::one();
         while n != 0 {
             if n % 2 == 1 {
                 y *= &x;
-                y = y.rem(m);
+                y = y.rem_checked(m)?;
             }
             x.square();
-            x = x.rem(m);
+            x = x.rem_checked(m)?;
             n >>= 1;            
         }
-        y
+        Ok(y)
+    }
+
+    pub fn pow_mod(&self, n: usize, m: &Poly) -> Poly {
+        self.pow_mod_checked(n, m).unwrap()
+    }
+
+    pub fn pow_mod_signed_checked(&self, n: isize, m: &Poly) -> Result<Option<Poly>, InvalidInputError> {
+        Ok(if n < 0 {
+            let inv = self.inv_mod_checked(m)?;
+            if let Some(inv) = inv {
+                Some(inv.pow_mod_checked((-n) as usize, m)?)
+            } else {
+                None
+            }
+        } else {
+            Some(self.pow_mod_checked(n as usize, m)?)
+        })
     }
 
     pub fn pow_mod_signed(&self, n: isize, m: &Poly) -> Option<Poly> {
-        Some(if n < 0 {
-            self.inv_mod(m)?.pow_mod((-n) as usize, m)
-        } else {
-            self.pow_mod(n as usize, m)
-        })
+        self.pow_mod_signed_checked(n, m).unwrap()
     }
 
     pub fn quot_rem_checked(&self, d: &Poly) -> Result<(Poly, Poly), InvalidInputError> {
@@ -400,12 +420,20 @@ impl Poly {
         self.quot_rem_checked(d).unwrap()
     }
 
+    pub fn quot_checked(&self, d: &Poly) -> Result<Poly, InvalidInputError> {
+        Ok(self.quot_rem_checked(d)?.0)
+    }
+
+    pub fn rem_checked(&self, d: &Poly) -> Result<Poly, InvalidInputError> {
+        Ok(self.quot_rem_checked(d)?.1)
+    }
+
     pub fn quot(&self, d: &Poly) -> Poly {
-        self.quot_rem(d).0
+        self.quot_checked(d).unwrap()
     }
 
     pub fn rem(&self, d: &Poly) -> Poly {
-        self.quot_rem(d).1
+        self.rem_checked(d).unwrap()
     }
 
     pub fn gcd(&self, rhs: &Poly) -> Poly {
@@ -434,6 +462,12 @@ impl Poly {
     }
 
     pub fn extended_gcd(&self, rhs: &Poly) -> (Poly, Poly, Poly) {
+        if self.is_zero() {
+            return (rhs.clone(), Poly::one(), Poly::one())
+        } else if rhs.is_zero() {
+            return (self.clone(), Poly::one(), Poly::one())
+        }
+
         let (mut r0, mut r1) = (self.clone(), rhs.clone());
         let (mut s0, mut s1) = (Poly::one(), Poly::ZERO);
         let (mut t0, mut t1) = (Poly::ZERO, Poly::one());
@@ -451,12 +485,26 @@ impl Poly {
         (r0, s0, t0)
     }
 
-    pub fn inv_mod(&self, f: &Poly) -> Option<Poly> {
+    pub fn inv_mod_checked(&self, f: &Poly) -> Result<Option<Poly>, InvalidInputError> {
+        validate_input!(!f.is_zero(), "modulus should not be zero" in inv_mod);
+
+        if self.is_zero() {
+            return Ok(None)
+        }
+
         let (r, s, _) = self.extended_gcd(f);
-        r.is_one().then_some(s)
+        Ok(r.is_one().then_some(s))
+    }
+
+    pub fn inv_mod(&self, f: &Poly) -> Option<Poly> {
+        self.inv_mod_checked(f).unwrap()
     }
 
     pub fn lcm(&self, rhs: &Poly) -> Poly {
+        if self.is_zero() || rhs.is_zero() {
+            return Poly::ZERO
+        }
+
         let d = self.gcd(rhs);
         self * rhs.quot(&d)
     }
@@ -466,16 +514,16 @@ impl Poly {
     }
 
     pub fn is_square_free(&self) -> bool {
-        self.gcd(&self.diff()).is_one()
+        self.is_zero() || self.is_one() || self.gcd(&self.diff()).is_one()
     }
 
-    pub fn square_free(&self) -> Vec<(Poly, usize)> {
+    pub fn square_free_factors(&self) -> Vec<(Poly, usize)> {
         if self.is_zero() || self.is_one() {
             return vec![(self.clone(), 1)]
         }
 
         if let Some(sqrt) = self.square_root() {
-            let mut sff = sqrt.square_free();
+            let mut sff = sqrt.square_free_factors();
             sff.iter_mut().for_each(|(_, p)| *p *= 2);
             return sff;
         }
@@ -485,8 +533,8 @@ impl Poly {
             return vec![(self.clone(), 1)]
         }
 
-        let sff_a = g.square_free();
-        let sff_b = self.quot(&g).square_free();
+        let sff_a = g.square_free_factors();
+        let sff_b = self.quot(&g).square_free_factors();
         let mut output = Vec::new();
         let mut idx_a = 0;
         let mut idx_b = 0;
@@ -539,7 +587,7 @@ impl Poly {
         mat
     }
 
-    pub fn factor_square_free(&self) -> Vec<Poly> {
+    fn factor_for_square_free(&self) -> Vec<Poly> {
         if self.is_one() || self.is_zero() {
             return vec![self.clone()]
         }
@@ -586,7 +634,7 @@ impl Poly {
             return vec![(self.clone(), 1)]
         }
 
-        let sff = self.square_free();
+        let sff = self.square_free_factors();
         let mut result = HashMap::new();
         for (mut term, reps) in sff {
             if term.terms().len() > 0 && term.terms()[0] > 0 {
@@ -599,13 +647,13 @@ impl Poly {
                 continue;
             }
 
-            for factor in term.factor_square_free() {
+            for factor in term.factor_for_square_free() {
                 *result.entry(factor)
                     .or_insert(0) += reps;
             }
         }
         let mut result = result.into_iter().collect::<Vec<_>>();
-        result.sort_by_key(|(p, _)| p.degree());
+        result.sort_by_key(|(p, m)| (p.degree(), *m));
         result
     }
 
@@ -618,6 +666,86 @@ impl Poly {
             }
         }
         out
+    }
+}
+
+#[test]
+fn pow_match_naive() {
+    use rand::{SeedableRng, RngExt};
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let a = Poly::random(&mut rng, 10);
+        let n = rng.random_range(0..64);
+        let computed = a.pow(n);
+        let naive = (0..n).map(|_| &a).fold(Poly::one(), |a, b| a * b);
+        assert_eq!(computed, naive);
+    }
+}
+
+#[test]
+fn pow_mod_match_naive() {
+    use rand::{SeedableRng, RngExt};
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let a = Poly::random(&mut rng, 10);
+        let m = loop {
+            let m = Poly::random(&mut rng, 20);
+            if !m.is_zero() { break m }
+        };
+        let n = rng.random_range(0..64);
+        let computed = a.pow_mod(n, &m);
+        let naive = (0..n).map(|_| &a).fold(Poly::one(), |a, b| (a * b).rem(&m));
+        assert_eq!(computed, naive);
+    }
+}
+
+#[test]
+fn inv_mod_mult_one() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let m = loop {
+            let m = Poly::random(&mut rng, 20);
+            if !m.is_zero() { break m }
+        };
+        let a = loop {
+            let a = Poly::random(&mut rng, 20);
+            if a.gcd(&m).is_one() { break a }
+        };
+        
+        assert_eq!((a.inv_mod(&m).unwrap() * a).rem(&m), Poly::one());
+    }
+}
+
+#[test]
+fn egcd_bezout() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let a = Poly::random(&mut rng, 10);
+        let b = Poly::random(&mut rng, 10);
+        let (r, s, t) = a.extended_gcd(&b);
+        let r2 = a.gcd(&b);
+        assert_eq!(r, a*s + t*b);
+        assert_eq!(r, r2);
+    }
+}
+
+#[test]
+fn sff_are_square_free() {
+    use rand::SeedableRng;
+    let mut rng = rand::rngs::SmallRng::from_seed([42; 32]);
+    for _ in 0..1000 {
+        let poly = Poly::random(&mut rng, 20);
+        let factors = poly.square_free_factors();
+        let mut rec = Poly::one();
+        for (f, m) in factors {
+            assert!(f.is_square_free());
+            for _ in 0..m {
+                rec = rec * &f;
+            }
+        }
+        assert_eq!(rec, poly);
     }
 }
 
